@@ -1,0 +1,22 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- 1. 原本的基础应用主题（主干道），保持干净，不用动它 -->
+    <style name="Base.Theme.MyApplication1" parent="Theme.Material3.DayNight.NoActionBar">
+        <!-- Customize your light theme here. -->
+        <!-- <item name="colorPrimary">@color/my_light_primary</item> -->
+    </style>
+
+    <style name="Theme.MyApplication1" parent="Base.Theme.MyApplication1" />
+
+    <!-- 🌟 2. 新增的开机界面主题（刚才清单文件里找不到的就是这个！） -->
+    <!-- 注意这里的 parent 必须是 Theme.SplashScreen -->
+    <style name="Theme.App.Starting" parent="Theme.SplashScreen">
+        <!-- 设置开机界面的背景颜色为纯白 -->
+        <item name="windowSplashScreenBackground">#FFFFFF</item>
+
+        <!-- 设置屏幕中间显示的文字图片 -->
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_text</item>
+
+        <!-- 🌟 最关键的一句：开机结束后，无缝切换回上面的 Theme.MyApplication1 -->
+        <item name="postSplashScreenTheme">@style/Theme.MyApplication1</item>
+    </style>
+</resources>
