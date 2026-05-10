@@ -17,7 +17,7 @@ android {
     defaultConfig {
         applicationId = "com.example.myapplication1"
         minSdk = 24
-        targetSdk = 34 // 提升至 34 以满足现代安卓系统的安全与性能要求
+        targetSdk = 30 // 提升至 34 以满足现代安卓系统的安全与性能要求
         versionCode = 1
         versionName = "1.0"
 
@@ -81,6 +81,8 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 
+
+
     // OkHttp 用于后续把图片发给后端的 Python/Node.js 服务器
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
@@ -97,4 +99,3 @@ dependencies {
     // 🌟 添加官方新版 Splash Screen 开屏兼容库
     implementation("androidx.core:core-splashscreen:1.0.1")
 }
-

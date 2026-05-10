@@ -17,7 +17,9 @@ import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
 import android.util.Base64
 import android.util.Log
+import android.view.GestureDetector
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.TextureView
 import android.widget.ImageView
 import android.widget.TextView
@@ -56,6 +58,7 @@ import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.sqrt
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import android.os.Looper // 确保文件最上方有这个导包，没有的话加上
 
 /**
  * 智能盲杖项目主活动类
@@ -93,6 +96,10 @@ class MainActivity : AppCompatActivity() {
     private var lastAnnouncedStreet = "" // 记录上次播报的街道名，防止一直重复同一条街
     private var lastIntersectionTime = 0L // 记录上次播报交叉路口的时间戳，防路口刷屏
 
+    // 🌟 新增：全局坐标缓存，专为跌倒等紧急情况瞬间提取最后一次已知位置使用
+    private var lastKnownLon: Double = 0.0
+    private var lastKnownLat: Double = 0.0
+
     /**
      * 语音识别结果回调启动器
      * 当用户说话完毕，系统返回语音转文字的结果后触发。
@@ -127,11 +134,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlayLeft: OverlayView
     private lateinit var overlayRight: OverlayView
 
+    // 🌟 新增：长按主动求救的手势识别器与防抖时间戳
+    private lateinit var gestureDetector: GestureDetector
+    private var lastSOSTime = 0L
+
     // ===== 测距、测速与平滑算法缓存 =====
     // 🌟 升级：双轨制语音控制时间戳，普通与紧急分离
     private var lastNormalSpeakTime = 0L // 控制普通语音播报频率，避免连续吵闹
     private var lastUrgentSpeakTime = 0L // 控制紧急语音防抖，确保每句警报能完整说完
     private var lastPrimaryDist = 0f // 主目标上一帧距离，用于测速
+
     private var lastPrimaryTime = 0L // 主目标上一帧时间，用于测速
     private var lastPrimaryCx = 0f
     private var lastPrimaryCy = 0f
@@ -246,10 +258,21 @@ class MainActivity : AppCompatActivity() {
         // 初始化跌倒检测器
         fallDetector = FallDetector(this) {
             runOnUiThread { Toast.makeText(this, "检测到严重跌倒！", Toast.LENGTH_LONG).show() }
-            // 🌟 跌倒属于最高优先级，直接强制掐断当前所有语音并强行插播
             speakOut("警告！检测到摔倒，正在启动紧急求助程序！", isInterrupt = true)
+
+            // 🌟 核心修复：发生跌倒时，立即上传状态，并附带最后一次成功缓存的经纬度，防止崩溃！
+            if (lastKnownLon != 0.0 && lastKnownLat != 0.0) {
+                uploadLocationToUniCloud(lastKnownLon, lastKnownLat, "FALL")
+            }
         }
         fallDetector.start()
+
+        // 🌟 新增：初始化手势识别器，全屏捕捉长按事件触发 SOS
+        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onLongPress(e: MotionEvent) {
+                triggerSOS()
+            }
+        })
 
         // 加载 YOLOv8 TFLite 模型，开启 4 线程加速
         try {
@@ -288,14 +311,40 @@ class MainActivity : AppCompatActivity() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
         val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
-        // 优先使用最高精度的 GPS 缓存，其次才是网络基站
-        val location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-            ?: locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+        val provider = if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            LocationManager.GPS_PROVIDER
+        } else {
+            LocationManager.NETWORK_PROVIDER
+        }
 
-        if (location != null) {
-            // 🌟 核心修复：后台巡航也要进行火星坐标系转换，消除 500 米物理偏移！
-            val (gcjLon, gcjLat) = wgs84ToGcj02(location.longitude, location.latitude)
-            fetchAddressFromAmap(gcjLon, gcjLat, isSilent = true)
+        // 🌟 核心修复：抛弃过时的 getLastKnownLocation，强制向硬件要一次最新鲜的坐标！
+        try {
+            locationManager.requestLocationUpdates(provider, 0L, 0f, object : LocationListener {
+                override fun onLocationChanged(loc: Location) {
+                    locationManager.removeUpdates(this) // 拿到最新坐标后立刻关掉监听，防止耗电
+
+                    // 进行火星坐标系转换
+                    val (gcjLon, gcjLat) = wgs84ToGcj02(loc.longitude, loc.latitude)
+
+                    // 刷新全局坐标缓存
+                    lastKnownLon = gcjLon
+                    lastKnownLat = gcjLat
+
+                    // 触发后台高德解析与路口播报
+                    fetchAddressFromAmap(gcjLon, gcjLat, isSilent = true)
+
+                    // 立刻上传云端，让亲友端看到移动！
+                    uploadLocationToUniCloud(gcjLon, gcjLat, "Normal")
+                }
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+
+                // 🌟 极其重要：因为是在后台定时器线程调用的，必须传入主线程 Looper 才能工作！
+            }, Looper.getMainLooper())
+
+        } catch (e: Exception) {
+            Log.e("Location", "后台强制定位失败", e)
         }
     }
 
@@ -328,13 +377,57 @@ class MainActivity : AppCompatActivity() {
                 // 彻底解决地点完全对不上、漂移好几条街的深坑！
                 val (gcjLon, gcjLat) = wgs84ToGcj02(loc.longitude, loc.latitude)
 
+                // 🌟 更新全局位置缓存
+                lastKnownLon = gcjLon
+                lastKnownLat = gcjLat
+
                 fetchAddressFromAmap(gcjLon, gcjLat, isSilent = false)
+
+                // 🌟 主动询问位置时，也同步更新一次给亲友端
+                uploadLocationToUniCloud(gcjLon, gcjLat, "Normal")
             }
             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
             override fun onProviderEnabled(provider: String) {}
             override fun onProviderDisabled(provider: String) {}
         })
     }
+
+    /**
+     * 🌟 方案 2：通过 OkHttp 将位置数据发送到 uniCloud URL化接口
+     */
+    private fun uploadLocationToUniCloud(lon: Double, lat: Double, status: String = "Normal") {
+        // 替换为你自己在 uniCloud 控制台生成的云函数 URL 化链接
+        val uniCloudUrl = "https://fc-mp-6aceaf7c-21e7-4eb1-a4f8-8e2bbdb8d479.next.bspapp.com/uploadLocation"
+
+        val json = JSONObject().apply {
+            put("longitude", lon)
+            put("latitude", lat)
+            put("deviceId", "Cane_001") // 建议固定或获取设备唯一标识
+            put("status", status)
+            put("timestamp", System.currentTimeMillis())
+        }
+
+        val requestBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
+        val request = Request.Builder()
+            .url(uniCloudUrl)
+            .post(requestBody)
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e("UniCloud", "数据上传失败: ${e.message}")
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (it.isSuccessful) {
+                        Log.d("UniCloud", "数据上传成功: ${it.body?.string()}")
+                    }
+                }
+            }
+        })
+    }
+
+
 
     /**
      * 访问高德 API 并进行智能状态分发播报
@@ -701,6 +794,27 @@ class MainActivity : AppCompatActivity() {
                                     val boxesToDrawLeft = mutableListOf<BoundingBox>()  // 🌟 左眼专用画框列表
                                     val boxesToDrawRight = mutableListOf<BoundingBox>() // 🌟 右眼专用画框列表
 
+                                    // ================= 步骤 4: SGBM 双目视差图生成 (移出 if 块，无论 YOLO 有无目标都要计算视差图！) =================
+                                    org.opencv.android.Utils.bitmapToMat(originalBitmap, fullMat)
+                                    if (actualWidth >= 1280) {
+                                        leftMat.apply { fullMat.submat(org.opencv.core.Rect(0, 0, 640, 480)).copyTo(this) }
+                                        rightMat.apply { fullMat.submat(org.opencv.core.Rect(640, 0, 640, 480)).copyTo(this) }
+                                    } else {
+                                        leftMat.apply { fullMat.copyTo(this) }
+                                        rightMat.apply { fullMat.copyTo(this) }
+                                    }
+
+                                    Imgproc.cvtColor(leftMat, grayL, Imgproc.COLOR_RGB2GRAY)
+                                    Imgproc.cvtColor(rightMat, grayR, Imgproc.COLOR_RGB2GRAY)
+                                    Imgproc.remap(grayL, rectL, mapLx, mapLy, Imgproc.INTER_LINEAR)
+                                    Imgproc.remap(grayR, rectR, mapRx, mapRy, Imgproc.INTER_LINEAR)
+
+                                    sgbm.compute(rectL, rectR, disparity16S)
+                                    disparity16S.convertTo(disparity32F, CvType.CV_32F, 1.0 / 16.0)
+
+                                    // 🌟 新增：YOLO 已知物体报警标志位（必须放在全局作用域，供后续判定互斥）
+                                    var hasYoloWarning = false
+
                                     if (finalDetections.isNotEmpty()) {
                                         val validDetections = mutableListOf<Detection>()
                                         for (det in finalDetections) {
@@ -736,24 +850,6 @@ class MainActivity : AppCompatActivity() {
                                                 det.lastDistance = bestMatch.distance
                                             }
                                         }
-
-                                        // ================= 步骤 4: SGBM 双目视差图生成 =================
-                                        org.opencv.android.Utils.bitmapToMat(originalBitmap, fullMat)
-                                        if (actualWidth >= 1280) {
-                                            leftMat.apply { fullMat.submat(org.opencv.core.Rect(0, 0, 640, 480)).copyTo(this) }
-                                            rightMat.apply { fullMat.submat(org.opencv.core.Rect(640, 0, 640, 480)).copyTo(this) }
-                                        } else {
-                                            leftMat.apply { fullMat.copyTo(this) }
-                                            rightMat.apply { fullMat.copyTo(this) }
-                                        }
-
-                                        Imgproc.cvtColor(leftMat, grayL, Imgproc.COLOR_RGB2GRAY)
-                                        Imgproc.cvtColor(rightMat, grayR, Imgproc.COLOR_RGB2GRAY)
-                                        Imgproc.remap(grayL, rectL, mapLx, mapLy, Imgproc.INTER_LINEAR)
-                                        Imgproc.remap(grayR, rectR, mapRx, mapRy, Imgproc.INTER_LINEAR)
-
-                                        sgbm.compute(rectL, rectR, disparity16S)
-                                        disparity16S.convertTo(disparity32F, CvType.CV_32F, 1.0 / 16.0)
 
                                         // ================= 步骤 5: 全量深度采样与距离计算 =================
                                         for (det in validDetections) {
@@ -827,6 +923,7 @@ class MainActivity : AppCompatActivity() {
 
                                             if (finalZ <= 1.0f && dangerousLabels.contains(finalLabel)) {
                                                 isTooClose = true
+                                                hasYoloWarning = true // 🌟 新增：记录 YOLO 发出了近距离警报，阻止全局 SGBM 重复报警
                                             }
 
                                             // 语音永远只判定离你最近的那一个（index == 0）
@@ -917,6 +1014,42 @@ class MainActivity : AppCompatActivity() {
                                         }
                                     }
 
+                                    // ================= 步骤 8: 🌟 SGBM 全局防撞兜底 (寻找未知障碍物) =================
+                                    // 🌟 新增：只有在 YOLO 没有发出警报时，才去排查是否有未知物体，防止两套系统同时说话吵架
+                                    val currentTimeSpeakROI = System.currentTimeMillis()
+                                    if (!hasYoloWarning && (currentTimeSpeakROI - lastUrgentSpeakTime > 2000L)) {
+                                        // 🌟 新增：划定前方走廊 ROI (画面正中央宽度，高度偏下半部分，避开天空和极远处的物体)
+                                        val startX = 640 / 4          // 160
+                                        val endX = 640 * 3 / 4        // 480
+                                        val startY = 480 / 2          // 240
+                                        val endY = 480 - 40           // 440，排除最底部的贴地噪点
+
+                                        var closePointsCount = 0
+                                        // 🌟 新增：1.0米对应的安全视差阈值 = (焦距 * 基线) / 距离
+                                        val dangerThresholdDisp = (328.26 * 60.99) / (1000.0 * 1.0) // 大约 20.0
+
+                                        // 🌟 新增：通过步长 (step 5) 进行下采样快速扫描，极大降低 CPU 消耗
+                                        for (y in startY until endY step 5) {
+                                            for (x in startX until endX step 5) {
+                                                val disp = disparity32F.get(y, x)[0]
+                                                // 🌟 新增：如果视差极大（超过1米阈值），说明有东西贴脸了
+                                                // 添加 < 150.0 是为了过滤掉极度异常的噪点（比如死区）
+                                                if (disp > dangerThresholdDisp && disp < 150.0) {
+                                                    closePointsCount++
+                                                }
+                                            }
+                                        }
+
+                                        // 🌟 新增：如果 ROI 内有超过 50 个采样点距离小于 1 米
+                                        // (因为使用了 step 5 降采样，50个点其实代表了画面中很大的一块物理面积)
+                                        if (closePointsCount > 50) {
+                                            // 🌟 新增：使用特权打断，因为未知障碍物贴脸是极其危险的情况！
+                                            speakOut("警告！距离未知物体过近，请避让！", isInterrupt = true)
+                                            lastUrgentSpeakTime = currentTimeSpeakROI
+                                            lastNormalSpeakTime = currentTimeSpeakROI
+                                        }
+                                    }
+
                                 } catch (e: Exception) { Log.e("YOLO_AI", "推理崩溃", e) }
                                 finally {
                                     // 务必手动释放 OpenCV Mat 内存，否则会导致内存泄漏与崩溃
@@ -933,6 +1066,38 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    /**
+     * 🌟 新增：全屏触摸事件分发
+     * 将所有的触摸事件交给 gestureDetector 处理，以捕捉长按操作
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
+        ev?.let { gestureDetector.onTouchEvent(it) }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    /**
+     * 🌟 新增：触发主动求救 (SOS)
+     */
+    private fun triggerSOS() {
+        val currentTime = System.currentTimeMillis()
+        // 5秒防抖冷却，防止用户一直按着屏幕导致连续触发几十次求救
+        if (currentTime - lastSOSTime > 5000L) {
+            lastSOSTime = currentTime
+
+            // 1. 语音安抚并强制打断其他废话
+            speakOut("紧急求助已发送，请保持在原地等待！", isInterrupt = true)
+            runOnUiThread { Toast.makeText(this@MainActivity, "主动求救已发送！", Toast.LENGTH_LONG).show() }
+
+            // 2. 将包含 SOS 状态的坐标上传至云端中转站
+            if (lastKnownLon != 0.0 && lastKnownLat != 0.0) {
+                uploadLocationToUniCloud(lastKnownLon, lastKnownLat, "SOS")
+            } else {
+                // 极端情况兜底：如果刚开机还没拿到定位就求救，也必须发个 SOS 给亲友端报警
+                uploadLocationToUniCloud(0.0, 0.0, "SOS")
+            }
+        }
     }
 
     /**
