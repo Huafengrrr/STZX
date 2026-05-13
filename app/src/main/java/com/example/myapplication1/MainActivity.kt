@@ -13,6 +13,9 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
+import android.provider.Settings
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
 import android.util.Base64
@@ -55,16 +58,18 @@ import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import kotlin.math.abs
-import kotlin.math.pow
-import kotlin.math.sqrt
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import android.os.Looper // 确保文件最上方有这个导包，没有的话加上
 
 /**
  * 智能盲杖项目主活动类
  * 负责调度摄像头画面获取、YOLO目标检测、双目视觉测距、大语言模型交互、地理定位与语音播报。
  */
 class MainActivity : AppCompatActivity() {
+
+    // 🌟 新增：设备的全局唯一硬件码
+    private var myDeviceId: String = ""
+    // 🌟 新增：标记是否已经被家属绑定
+    private var isDeviceBound: Boolean = false
 
     /**
      * 目标检测数据类 (Data Class)
@@ -79,7 +84,7 @@ class MainActivity : AppCompatActivity() {
      * @param lastDistance 历史/上一帧的距离 (用于 EMA 滤波平滑)
      * @param disparity 🌟 新增：该物体的双目视差，用于右眼画面的精准画框偏移
      */
-    data class Detection(var cx: Float, var cy: Float, var w: Float, var h: Float, val classId: Int, val score: Float, var distance: Float = -1f, var lastDistance: Float = -1f, var disparity: Float = 0f)
+    data class Detection(var cx: Float, var cy: Float, var w: Float, var h: Float, val classId: Int, val score: Float, var distance: Float = -1f, var lastDistance: Float = -1f, var disparity: Float = 0f, var vx: Float = 0f, var vy: Float = 0f)
 
     // ===== 状态控制变量 =====
     private var lastVolumeClickTime = 0L // 记录上次按下音量键的时间，防抖
@@ -252,6 +257,9 @@ class MainActivity : AppCompatActivity() {
             if (it == TextToSpeech.SUCCESS) {
                 tts.setLanguage(Locale.CHINESE)
                 speakOut("声途智行启动成功", isInterrupt = false)
+
+                // 🌟 就在这里！只要 TTS 初始化成功，立刻开始设备鉴权与播报配对码！
+                initDeviceBinding()
             }
         }
 
@@ -288,7 +296,67 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ================== 🌟 智能导航与寻址核心逻辑 ==================
+    // ================== 🌟 智能导航、寻址与物联网绑定核心逻辑 ==================
+
+    /**
+     * 初始化设备绑定逻辑（向云端获取配对码并播报）
+     */
+    private fun initDeviceBinding() {
+        // 获取这台手机全球唯一的 Android 硬件 ID
+        myDeviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+
+        val uniCloudUrl = "https://fc-mp-6aceaf7c-21e7-4eb1-a4f8-8e2bbdb8d479.next.bspapp.com/uploadLocation"
+        val json = JSONObject()
+        json.put("action", "initDevice")
+        json.put("deviceId", myDeviceId)
+
+        val request = Request.Builder()
+            .url(uniCloudUrl)
+            .post(json.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e("BlindCane", "获取配对码网络失败", e)
+                // 网络失败的话，过10秒再重试
+                Handler(Looper.getMainLooper()).postDelayed({ initDeviceBinding() }, 10000)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val resStr = response.body?.string()
+                try {
+                    val resJson = JSONObject(resStr ?: "")
+                    if (resJson.getBoolean("success")) {
+                        val isBound = resJson.getBoolean("isBound")
+                        val code = resJson.getString("pairingCode")
+
+                        if (!isBound) {
+                            // 🌟 核心优化：把 123456 变成 "1, 2, 3, 4, 5, 6," 防止被读成十几万
+                            val spacedCode = code.toCharArray().joinToString(", ")
+                            val textToSpeak = "欢迎使用声途智行。您的盲杖配对码是：$spacedCode。请家属在亲友端输入绑定。"
+
+                            runOnUiThread {
+                                speakOut(textToSpeak, isInterrupt = true)
+                                // 因为还没绑定，每隔 8 秒向云端问一次“我被绑定了吗？”
+                                Handler(Looper.getMainLooper()).postDelayed({ initDeviceBinding() }, 8000)
+                            }
+                        } else {
+                            // 如果之前是未绑定状态，现在发现被绑定了，播报成功！
+                            if (!isDeviceBound) {
+                                runOnUiThread {
+                                    speakOut("盲杖绑定成功！开始为您导航。", isInterrupt = true)
+                                }
+                                isDeviceBound = true
+                            }
+                            // 已经绑定的情况，正常往下执行避障逻辑即可
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e("BlindCane", "解析配对数据失败", e)
+                }
+            }
+        })
+    }
 
     /**
      * 启动后台位置巡航定时器
@@ -402,7 +470,11 @@ class MainActivity : AppCompatActivity() {
         val json = JSONObject().apply {
             put("longitude", lon)
             put("latitude", lat)
-            put("deviceId", "Cane_001") // 建议固定或获取设备唯一标识
+            // 🌟 使用系统抓取的真实硬件码
+            if (myDeviceId.isEmpty()) {
+                myDeviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+            }
+            put("deviceId", myDeviceId)
             put("status", status)
             put("timestamp", System.currentTimeMillis())
         }
@@ -848,6 +920,12 @@ class MainActivity : AppCompatActivity() {
                                                 det.w = boxAlpha * det.w + (1f - boxAlpha) * bestMatch.w
                                                 det.h = boxAlpha * det.h + (1f - boxAlpha) * bestMatch.h
                                                 det.lastDistance = bestMatch.distance
+                                                // 🌟 计算目标在画面中的移动速度 (像素/秒)，用于运动预测插值
+                                                val dt = (System.currentTimeMillis() - lastPrimaryTime) / 1000f
+                                                if (dt > 0.05f && lastPrimaryTime > 0L) {
+                                                    det.vx = (det.cx - bestMatch.cx) / dt
+                                                    det.vy = (det.cy - bestMatch.cy) / dt
+                                                }
                                             }
                                         }
 
@@ -989,11 +1067,17 @@ class MainActivity : AppCompatActivity() {
                                                 val finalCy = det.cy * scaleFactor + yOffset
                                                 val finalW = det.w * scaleFactor
                                                 val finalH = det.h * scaleFactor
-                                                boxesToDrawLeft.add(BoundingBox(finalCxLeft - finalW/2f, finalCy - finalH/2f, finalCxLeft + finalW/2f, finalCy + finalH/2f, displayLabel, det.score))
+                                                val boxLeft = BoundingBox(finalCxLeft - finalW/2f, finalCy - finalH/2f, finalCxLeft + finalW/2f, finalCy + finalH/2f, displayLabel, det.score)
+                                                boxLeft.vx = det.vx * scaleFactor
+                                                boxLeft.vy = det.vy * scaleFactor
+                                                boxesToDrawLeft.add(boxLeft)
 
                                                 // 2. 右眼坐标 (减去视差 Disparity 实现完美的物理偏移)
                                                 val finalCxRight = (det.cx - det.disparity) * scaleFactor
-                                                boxesToDrawRight.add(BoundingBox(finalCxRight - finalW/2f, finalCy - finalH/2f, finalCxRight + finalW/2f, finalCy + finalH/2f, displayLabel, det.score))
+                                                val boxRight = BoundingBox(finalCxRight - finalW/2f, finalCy - finalH/2f, finalCxRight + finalW/2f, finalCy + finalH/2f, displayLabel, det.score)
+                                                boxRight.vx = det.vx * scaleFactor
+                                                boxRight.vy = det.vy * scaleFactor
+                                                boxesToDrawRight.add(boxRight)
                                             }
                                         }
 
