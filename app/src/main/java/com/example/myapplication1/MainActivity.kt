@@ -945,8 +945,12 @@ class MainActivity : AppCompatActivity() {
 
                                             val dispList = mutableListOf<Double>()
 
-                                            val stepX = maxOf(2, (endX - startX) / 10)
-                                            val stepY = maxOf(2, (endY - startY) / 10)
+                                            // 🌟【方案1】自适应采样密度：目标越大，采样点越多，保证数据质量
+                                            val minSamples = 15
+                                            val boxArea = det.w * det.h
+                                            val adaptiveSamples = maxOf(minSamples, (boxArea / 800).toInt().coerceIn(15, 30))
+                                            val stepX = maxOf(2, (endX - startX) / adaptiveSamples)
+                                            val stepY = maxOf(2, (endY - startY) / adaptiveSamples)
 
                                             for (py in startY..endY step stepY) {
                                                 for (px in startX..endX step stepX) {
@@ -957,16 +961,32 @@ class MainActivity : AppCompatActivity() {
                                                 }
                                             }
 
-                                            val d = if (dispList.size >= 3) {
+                                            // 🌟【方案2】增强统计去噪：MAD异常值剔除 + 四分位法，先剔除离群点再求平均
+                                            val d = if (dispList.size >= 5) {
                                                 dispList.sort()
-                                                val startIdx = dispList.size / 4
-                                                val endIdx = dispList.size * 3 / 4
-                                                if (endIdx > startIdx) {
-                                                    dispList.subList(startIdx, endIdx).average()
+                                                val median = dispList[dispList.size / 2]
+                                                // 计算 MAD（中位数绝对偏差），用于识别异常值
+                                                val mad = dispList.map { abs(it - median) }.sorted()[dispList.size / 2]
+                                                val threshold = if (mad > 0.0) 2.5 * mad else median * 0.3
+                                                // 只保留合理范围内的视差值
+                                                val filtered = dispList.filter { abs(it - median) <= threshold }
+                                                if (filtered.size >= 3) {
+                                                    filtered.sorted()
+                                                    val fStartIdx = filtered.size / 4
+                                                    val fEndIdx = filtered.size * 3 / 4
+                                                    if (fEndIdx > fStartIdx) {
+                                                        filtered.subList(fStartIdx, fEndIdx).average()
+                                                    } else {
+                                                        filtered[filtered.size / 2]
+                                                    }
                                                 } else {
-                                                    dispList[dispList.size / 2]
+                                                    median
                                                 }
-                                            } else { 0.0 }
+                                            } else if (dispList.isNotEmpty()) {
+                                                dispList[dispList.size / 2]
+                                            } else {
+                                                0.0
+                                            }
 
                                             if (d > 1.0) {
                                                 det.disparity = d.toFloat()
