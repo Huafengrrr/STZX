@@ -108,6 +108,23 @@ class MainActivity : AppCompatActivity() {
     private var lastKnownLon: Double = 0.0
     private var lastKnownLat: Double = 0.0
 
+    // ===== 🌟 语音导航专用状态变量 =====
+    private var isNavigating = false // 是否正在导航模式
+    private var navSteps = mutableListOf<NavigationStep>() // 导航步骤列表
+    private var currentStepIndex = 0 // 当前走到了第几步
+
+    /**
+     * 导航步骤数据类
+     * 用于存储从高德 API 解析出的每一步转向指令
+     */
+    data class NavigationStep(
+        val instruction: String,  // 转向指令，如"向左转"
+        val distance: Int,        // 本步距离（米）
+        val roadName: String,     // 本步所在道路名
+        val lat: Double,           // 该节点的高德坐标纬度
+        val lon: Double            // 该节点的高德坐标经度
+    )
+
     /**
      * 语音识别结果回调启动器
      * 当用户说话完毕，系统返回语音转文字的结果后触发。
@@ -119,7 +136,25 @@ class MainActivity : AppCompatActivity() {
                 val userText = matches[0] // 提取用户说的第一句话
                 // 🌟 意图路由升级：扩大定位触发词库，支持更多自然语言问法
                 val locationKeywords = listOf("在哪", "位置", "定位", "地方", "方位", "哪儿", "什么路", "什么街")
-                if (locationKeywords.any { userText.contains(it) }) {
+                // 🌟 新增：导航意图关键词识别（支持"导航到xxx"、"去xxx"、"带我去xxx"等说法）
+                val navKeywords = listOf("导航到", "导航去", "去", "带我到", "去往")
+                val isNavIntent = navKeywords.any { userText.contains(it) }
+
+                if (isNavIntent) {
+                    // 🌟 截取目的地名称（去掉"导航到"等前缀）
+                    var destination = userText
+                    for (keyword in navKeywords) {
+                        if (userText.contains(keyword)) {
+                            destination = userText.substringAfter(keyword).trim()
+                            break
+                        }
+                    }
+                    if (destination.isNotEmpty()) {
+                        startNavigation(destination)
+                    } else {
+                        speakOut("请告诉我要去哪里，例如：导航到北京西站", isInterrupt = true)
+                    }
+                } else if (locationKeywords.any { userText.contains(it) }) {
                     tellMeWhereIAm()
                 } else {
                     // 🌟 按键触发，拥有最高打断特权，强行切断废话！
@@ -421,6 +456,9 @@ class MainActivity : AppCompatActivity() {
                     // 触发后台高德解析与路口播报
                     fetchAddressFromAmap(gcjLon, gcjLat, isSilent = true)
 
+                    // 🌟 顺带检查是否到达下一个导航节点
+                    checkNavProgress()
+
                     // 立刻上传云端，让亲友端看到移动！
                     uploadLocationToUniCloud(gcjLon, gcjLat, "Normal")
                 }
@@ -667,6 +705,253 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
+    }
+
+    // =============================================================
+    // 🌟 【语音导航核心模块】：高德 Web API 步行路线规划 + 纯语音播报
+    // =============================================================
+
+    /**
+     * 🌟 导航入口：根据用户说的目的地启动步行导航流程
+     * @param destination 用户想去的地名/地址（如"北京西站"、"天安门"）
+     */
+    private fun startNavigation(destination: String) {
+        speakOut("好的，正在规划去$destination 的步行路线，请稍候", isInterrupt = true)
+
+        // 先获取当前位置，再调用高德步行路线规划 API
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            speakOut("缺少定位权限，无法导航，请在设置中开启", isInterrupt = true)
+            return
+        }
+
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+        val provider = if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+            LocationManager.GPS_PROVIDER
+        } else {
+            LocationManager.NETWORK_PROVIDER
+        }
+
+        try {
+            locationManager.requestLocationUpdates(provider, 0L, 0f, object : LocationListener {
+                override fun onLocationChanged(loc: Location) {
+                    locationManager.removeUpdates(this)
+
+                    // WGS84 → GCJ02 火星坐标
+                    val (gcjLon, gcjLat) = wgs84ToGcj02(loc.longitude, loc.latitude)
+
+                    // 更新全局坐标缓存
+                    lastKnownLon = gcjLon
+                    lastKnownLat = gcjLat
+
+                    // 🌟 调用高德步行路线规划 API
+                    fetchWalkingRoute(gcjLon, gcjLat, destination)
+                }
+                override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+                override fun onProviderEnabled(provider: String) {}
+                override fun onProviderDisabled(provider: String) {}
+            }, Looper.getMainLooper())
+        } catch (e: Exception) {
+            Log.e("Nav", "导航定位失败", e)
+            speakOut("获取当前位置失败，导航无法启动", isInterrupt = true)
+        }
+    }
+
+    /**
+     * 🌟 调用高德步行路线规划 Web API
+     * @param originLon 起点经度（GCJ02）
+     * @param originLat 起点纬度（GCJ02）
+     * @param destinationName 目的地名称
+     */
+    private fun fetchWalkingRoute(originLon: Double, originLat: Double, destinationName: String) {
+        // Step 1：先把目的地名称转换为经纬度坐标
+        val geoUrl = "https://restapi.amap.com/v3/geocode/geo?address=$destinationName&key=$AMAP_WEB_KEY"
+
+        client.newCall(Request.Builder().url(geoUrl).get().build()).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                speakOut("网络连接失败，无法查询目的地", isInterrupt = true)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!it.isSuccessful) {
+                        speakOut("查询目的地失败，请换一个地址试试", isInterrupt = true)
+                        return
+                    }
+                    try {
+                        val geoJson = JSONObject(it.body?.string() ?: "")
+                        if (geoJson.getString("status") != "1" || geoJson.getInt("count") == 0) {
+                            speakOut("未找到目的地，请换一个地址试试", isInterrupt = true)
+                            return
+                        }
+
+                        // 解析目的地坐标（格式："116.481028,39.989643"）
+                        val destLocation = geoJson.getJSONArray("geocodes").getJSONObject(0).getString("location")
+                        val destParts = destLocation.split(",")
+                        val destLon = destParts[0].toDouble()
+                        val destLat = destParts[1].toDouble()
+
+                        // Step 2：用起终点坐标调用步行路线规划 API
+                        val routeUrl = "https://restapi.amap.com/v3/direction/walking?origin=$originLon,$originLat&destination=$destLon,$destLat&key=$AMAP_WEB_KEY"
+
+                        client.newCall(Request.Builder().url(routeUrl).get().build()).enqueue(object : Callback {
+                            override fun onFailure(call: Call, e: IOException) {
+                                speakOut("路线查询网络失败，请稍后重试", isInterrupt = true)
+                            }
+
+                            override fun onResponse(call: Call, response: Response) {
+                                response.use {
+                                    if (!it.isSuccessful) {
+                                        speakOut("路线规划失败，请稍后重试", isInterrupt = true)
+                                        return
+                                    }
+                                    try {
+                                        val routeJson = JSONObject(it.body?.string() ?: "")
+                                        if (routeJson.getString("status") != "1") {
+                                            speakOut("路线规划返回异常，请稍后重试", isInterrupt = true)
+                                            return
+                                        }
+
+                                        val route = routeJson.getJSONObject("route")
+                                        val pathArray = route.getJSONArray("paths")
+                                        if (pathArray.length() == 0) {
+                                            speakOut("未能规划出可行路线，请确认起终点是否正确", isInterrupt = true)
+                                            return
+                                        }
+
+                                        val stepsArray = pathArray.getJSONObject(0).getJSONArray("steps")
+
+                                        // 🌟 解析每一步的导航指令
+                                        navSteps.clear()
+                                        var totalDistance = 0
+                                        for (i in 0 until stepsArray.length()) {
+                                            val step = stepsArray.getJSONObject(i)
+                                            val instruction = step.getString("instruction") // 完整转向描述
+                                            val distance = step.getInt("distance") // 本步距离（米）
+                                            val roadName = step.optString("road_name", "道路") // 本步道路名
+                                            // 该节点坐标（每步终点的坐标）
+                                            val stepLocation = step.optString("location", "")
+                                            val stepParts = if (stepLocation.contains(",")) {
+                                                stepLocation.split(",")
+                                            } else {
+                                                // 如果没有精确坐标，用线性插值估算
+                                                listOf(
+                                                    (originLon + (destLon - originLon) * (i + 1) / stepsArray.length()).toString(),
+                                                    (originLat + (destLat - originLat) * (i + 1) / stepsArray.length()).toString()
+                                                )
+                                            }
+                                            val stepLon = stepParts.getOrNull(0)?.toDoubleOrNull() ?: destLon
+                                            val stepLat = stepParts.getOrNull(1)?.toDoubleOrNull() ?: destLat
+
+                                            navSteps.add(NavigationStep(instruction, distance, roadName, stepLat, stepLon))
+                                            totalDistance += distance
+                                        }
+
+                                        // 🌟 开启导航状态，播报路线总览
+                                        isNavigating = true
+                                        currentStepIndex = 0
+
+                                        // 计算预计步行时间（每分钟约80米）
+                                        val walkTime = (totalDistance / 80).coerceAtLeast(1)
+                                        val destName = geoJson.getJSONArray("geocodes").getJSONObject(0).optString("name", destinationName)
+                                        speakOut("开始导航，终点：${destName}。全程约${totalDistance}米，预计步行约${walkTime}分钟。", isInterrupt = true)
+
+                                        // 立刻播报第一步
+                                        Handler(Looper.getMainLooper()).postDelayed({
+                                            announceCurrentNavStep()
+                                        }, 3000)
+
+                                    } catch (e: Exception) {
+                                        Log.e("Nav", "解析路线失败", e)
+                                        speakOut("解析路线数据出错，请稍后重试", isInterrupt = true)
+                                    }
+                                }
+                            }
+                        })
+
+                    } catch (e: Exception) {
+                        Log.e("Nav", "解析目的地坐标失败", e)
+                        speakOut("解析目的地信息出错，请换一个地址试试", isInterrupt = true)
+                    }
+                }
+            }
+        })
+    }
+
+    /**
+     * 🌟 播报当前导航步骤
+     * 当用户到达每一个导航节点时调用此方法播报下一步转向指令
+     */
+    private fun announceCurrentNavStep() {
+        if (!isNavigating || currentStepIndex >= navSteps.size) {
+            if (isNavigating) {
+                // 🌟 到达目的地！
+                isNavigating = false
+                navSteps.clear()
+                speakOut("已到达目的地！祝您一路平安！", isInterrupt = true)
+            }
+            return
+        }
+
+        val step = navSteps[currentStepIndex]
+        val distanceText = if (step.distance >= 1000) {
+            val km = step.distance / 1000.0
+            String.format(Locale.US, "%.1f公里", km)
+        } else {
+            "${step.distance}米"
+        }
+
+        // 🌟 组装播报文本：先说距离，再说转向指令（符合盲人导航习惯）
+        val speakText = buildString {
+            append("沿${step.roadName}直行")
+            append(distanceText)
+            append("，然后")
+            append(step.instruction)
+        }
+        speakOut(speakText, isInterrupt = false)
+    }
+
+    /**
+     * 🌟 到达节点判断（ Haversine 半正矢公式计算两点间球面距离）
+     * @return 两点间距离（米）
+     */
+    private fun haversineDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val R = 6371000.0 // 地球半径（米）
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        return R * c
+    }
+
+    /**
+     * 🌟 在后台巡航定位时，顺带检查是否到达下一个导航节点
+     * 每次 silentlyFetchLocation() 拿到新坐标时自动触发
+     */
+    private fun checkNavProgress() {
+        if (!isNavigating || currentStepIndex >= navSteps.size) return
+
+        val step = navSteps[currentStepIndex]
+        val distToNode = haversineDistance(lastKnownLat, lastKnownLon, step.lat, step.lon)
+
+        // 🌟 到达阈值：距离节点20米以内就算到达
+        if (distToNode <= 20.0) {
+            currentStepIndex++
+
+            // 🌟 到达倒数第二个节点（还剩50米以内）时播报最后一次提示
+            if (currentStepIndex == navSteps.size - 1) {
+                val lastStep = navSteps[currentStepIndex]
+                speakOut("前方${lastStep.distance}米，到达${lastStep.instruction}", isInterrupt = false)
+                currentStepIndex++
+            } else if (currentStepIndex < navSteps.size) {
+                // 正常播报下一步
+                announceCurrentNavStep()
+            } else {
+                // 所有步骤播完了
+                announceCurrentNavStep()
+            }
+        }
     }
 
     // =============================================================
