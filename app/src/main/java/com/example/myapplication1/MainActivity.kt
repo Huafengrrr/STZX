@@ -18,6 +18,7 @@ import android.os.Handler
 import android.os.Looper
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.util.Log
 import android.view.GestureDetector
@@ -70,6 +71,8 @@ class MainActivity : AppCompatActivity() {
     private var myDeviceId: String = ""
     // 🌟 新增：标记是否已经被家属绑定
     private var isDeviceBound: Boolean = false
+    // 🌟 新增：防止配对码播报期间被下一轮轮询重复打断
+    private var isPairingCodeSpeaking = false
 
     /**
      * 目标检测数据类 (Data Class)
@@ -331,14 +334,31 @@ class MainActivity : AppCompatActivity() {
                         val code = resJson.getString("pairingCode")
 
                         if (!isBound) {
-                            // 🌟 核心优化：把 123456 变成 "1, 2, 3, 4, 5, 6," 防止被读成十几万
-                            val spacedCode = code.toCharArray().joinToString(", ")
+                            // 🌟 核心优化：把 123456 变成 "1  2  3  4  5  6" 防止被读成十几万，双空格分隔比逗号更流畅
+                            val spacedCode = code.toCharArray().joinToString("  ")
                             val textToSpeak = "欢迎使用声途智行。您的盲杖配对码是：$spacedCode。请家属在亲友端输入绑定。"
 
                             runOnUiThread {
-                                speakOut(textToSpeak, isInterrupt = true)
-                                // 因为还没绑定，每隔 8 秒向云端问一次“我被绑定了吗？”
-                                Handler(Looper.getMainLooper()).postDelayed({ initDeviceBinding() }, 8000)
+                                // 🌟 防重播：正在播报配对码时不重复触发，避免播到一半被打断重来
+                                if (!isPairingCodeSpeaking) {
+                                    isPairingCodeSpeaking = true
+                                    // 播完之后才触发下一轮绑定查询，从根本上杜绝自我打断
+                                    tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                                        override fun onStart(utteranceId: String?) {}
+                                        override fun onDone(utteranceId: String?) {
+                                            isPairingCodeSpeaking = false
+                                            // 说完了，等 3 秒再向云端问一次"我被绑定了吗？"
+                                            if (!isDeviceBound) {
+                                                Handler(Looper.getMainLooper()).postDelayed({ initDeviceBinding() }, 3000)
+                                            }
+                                        }
+                                        override fun onError(utteranceId: String?) {
+                                            isPairingCodeSpeaking = false
+                                        }
+                                    })
+                                    tts.speak(textToSpeak, TextToSpeech.QUEUE_FLUSH, null, "PAIRING_CODE")
+                                }
+                                // 🌟 正在播报中：不打断，轮询下一次交给 onDone 回调处理
                             }
                         } else {
                             // 如果之前是未绑定状态，现在发现被绑定了，播报成功！
