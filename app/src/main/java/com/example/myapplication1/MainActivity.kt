@@ -322,7 +322,7 @@ class MainActivity : AppCompatActivity() {
 
         // 加载 YOLOv8 TFLite 模型，开启 4 线程加速
         try {
-            tflite = Interpreter(loadModelFile("yolo.tflite"), Interpreter.Options().apply { numThreads = 4 })
+            tflite = Interpreter(loadModelFile("yolo.tflite"), Interpreter.Options().apply { numThreads = 1 })
         } catch (e: Exception) { Log.e("TFLite", "模型加载失败", e) }
 
         // 检查并请求权限
