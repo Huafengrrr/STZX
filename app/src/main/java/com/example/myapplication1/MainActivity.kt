@@ -21,7 +21,6 @@ import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
 import android.util.Log
-import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.TextureView
@@ -177,9 +176,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var overlayLeft: OverlayView
     private lateinit var overlayRight: OverlayView
 
-    // 🌟 新增：长按主动求救的手势识别器与防抖时间戳
-    private lateinit var gestureDetector: GestureDetector
+    // 🌟 新增：求救防抖时间戳
     private var lastSOSTime = 0L
+    // 🌟 音量上+关机键组合键状态：记录音量上键按下的时间戳
+    private var volumeUpPressTime = 0L
+    private val COMBO_WINDOW_MS = 1000L // 组合键有效时间窗口：1秒内按下两个键才算组合键
 
     // ===== 测距、测速与平滑算法缓存 =====
     // 🌟 升级：双轨制语音控制时间戳，普通与紧急分离
@@ -312,13 +313,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
         fallDetector.start()
-
-        // 🌟 新增：初始化手势识别器，全屏捕捉长按事件触发 SOS
-        gestureDetector = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onLongPress(e: MotionEvent) {
-                triggerSOS()
-            }
-        })
 
         // 加载 YOLOv8 TFLite 模型，开启 4 线程加速
         try {
@@ -1476,16 +1470,6 @@ class MainActivity : AppCompatActivity() {
             }
         })
     }
-
-    /**
-     * 🌟 新增：全屏触摸事件分发
-     * 将所有的触摸事件交给 gestureDetector 处理，以捕捉长按操作
-     */
-    override fun dispatchTouchEvent(ev: MotionEvent?): Boolean {
-        ev?.let { gestureDetector.onTouchEvent(it) }
-        return super.dispatchTouchEvent(ev)
-    }
-
     /**
      * 🌟 新增：触发主动求救 (SOS)
      */
@@ -1594,11 +1578,27 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * 拦截手机实体按键事件 (用作无障碍交互入口)
-     * 按下【音量减小】键触发系统语音识别
+     * 【音量下键】→ 触发系统语音识别
+     * 【音量上+关机键组合】→ 触发主动求救 SOS
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        val currentTime = System.currentTimeMillis()
+
+        // 🌟 音量上+关机键组合键：SOS 求救（1秒时间窗口）
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP && event?.repeatCount == 0) {
+            volumeUpPressTime = currentTime
+            return true // 消费事件，阻止音量变化
+        }
+        if (keyCode == KeyEvent.KEYCODE_POWER && event?.repeatCount == 0) {
+            // 如果1秒内按过音量上键，则触发 SOS
+            if (currentTime - volumeUpPressTime <= COMBO_WINDOW_MS && volumeUpPressTime > 0L) {
+                triggerSOS()
+                return true // 消费事件，阻止关机
+            }
+        }
+
+        // 音量下键 → 语音识别
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event?.repeatCount == 0) {
-            val currentTime = System.currentTimeMillis()
             if (currentTime - lastVolumeClickTime > 1500L) { // 1.5秒防连按控制
                 lastVolumeClickTime = currentTime
                 // 🌟 核心打断点：按键瞬间物理停止所有正在发音的语句！
