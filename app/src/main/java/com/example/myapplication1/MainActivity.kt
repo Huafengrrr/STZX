@@ -178,9 +178,11 @@ class MainActivity : AppCompatActivity() {
 
     // 🌟 新增：求救防抖时间戳
     private var lastSOSTime = 0L
-    // 🌟 音量上+关机键组合键状态：记录音量上键按下的时间戳
-    private var volumeUpPressTime = 0L
-    private val COMBO_WINDOW_MS = 1000L // 组合键有效时间窗口：1秒内按下两个键才算组合键
+    // 🌟 音量上键快速连按求救状态：记录按下次时间和计数器
+    private var sosPressCount = 0          // 累计按下次数
+    private var sosFirstPressTime = 0L     // 第一次按下的时间戳
+    private val SOS_PRESS_INTERVAL_MS = 800 // 两次按键间隔必须小于800ms才算连按
+    private val SOS_REQUIRED_COUNT = 3     // 连续按3次触发SOS
 
     // ===== 测距、测速与平滑算法缓存 =====
     // 🌟 升级：双轨制语音控制时间戳，普通与紧急分离
@@ -1579,22 +1581,26 @@ class MainActivity : AppCompatActivity() {
     /**
      * 拦截手机实体按键事件 (用作无障碍交互入口)
      * 【音量下键】→ 触发系统语音识别
-     * 【音量上+关机键组合】→ 触发主动求救 SOS
+     * 【音量上键快速连按3次】→ 触发主动求救 SOS
      */
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val currentTime = System.currentTimeMillis()
 
-        // 🌟 音量上+关机键组合键：SOS 求救（1秒时间窗口）
+        // 🌟 音量上键连按计数：SOS 求救（3次连按，间隔<800ms，总窗口<2秒）
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP && event?.repeatCount == 0) {
-            volumeUpPressTime = currentTime
-            return true // 消费事件，阻止音量变化
-        }
-        if (keyCode == KeyEvent.KEYCODE_POWER && event?.repeatCount == 0) {
-            // 如果1秒内按过音量上键，则触发 SOS
-            if (currentTime - volumeUpPressTime <= COMBO_WINDOW_MS && volumeUpPressTime > 0L) {
-                triggerSOS()
-                return true // 消费事件，阻止关机
+            // 重置条件：超过2秒没按过则重新计数
+            if (currentTime - sosFirstPressTime > 2000L) {
+                sosPressCount = 0
+                sosFirstPressTime = currentTime
             }
+            sosPressCount++
+            // 达到3次触发SOS
+            if (sosPressCount >= SOS_REQUIRED_COUNT) {
+                triggerSOS()
+                sosPressCount = 0 // 触发后重置
+                sosFirstPressTime = 0L
+            }
+            return true // 消费事件，阻止音量变化
         }
 
         // 音量下键 → 语音识别
