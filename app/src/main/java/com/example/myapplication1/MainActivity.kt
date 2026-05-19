@@ -1223,7 +1223,7 @@ class MainActivity : AppCompatActivity() {
                                             }
                                         }
 
-                                        val threshold = if (classId == 1) 0.20f else 0.30f
+                                        val threshold = if (classId == 1) 0.35f else 0.50f
 
                                         if (maxClassScore > threshold) {
                                             rawDetections.add(Detection(
@@ -1400,6 +1400,7 @@ class MainActivity : AppCompatActivity() {
 
                                         for ((index, det) in closeTargets.withIndex()) {
                                             val finalLabel = if (det.classId < labels.size) labels[det.classId] else "未知"
+                                            val isUnknownLabel = (det.classId >= labels.size) // 🌟 未知类别不播报，只画框
                                             val finalZ = det.distance
                                             val distanceStr = String.format("%.1f米", finalZ)
                                             var speedStr = ""
@@ -1445,9 +1446,9 @@ class MainActivity : AppCompatActivity() {
                                                         lastUrgentSpeakTime = currentTimeSpeak
                                                         lastNormalSpeakTime = currentTimeSpeak // 刷新普通时间
                                                     }
-                                                } else {
-                                                    // 🚶 常规路况播报
-                                                    // 同样必须等上一句话说完，绝不插嘴
+                                                } else if (!isUnknownLabel) {
+                                                    // 🚶 常规路况播报（跳过"未知"物体，不打断大模型语音输出）
+                                                    // 必须等 TTS 说完 + 超过防抖间隔，才播下一句
                                                     if (!tts.isSpeaking && (currentTimeSpeak - lastNormalSpeakTime > 2500L)) {
                                                         val speakText = if (speedStr.isNotEmpty()) {
                                                             "注意！最近的$finalLabel 在$distanceStr$speedStr"
@@ -1532,9 +1533,9 @@ class MainActivity : AppCompatActivity() {
 
                                         // 🌟 新增：如果 ROI 内有超过 50 个采样点距离小于 1 米
                                         // (因为使用了 step 5 降采样，50个点其实代表了画面中很大的一块物理面积)
-                                        if (closePointsCount > 50) {
-                                            // 🌟 新增：使用特权打断，因为未知障碍物贴脸是极其危险的情况！
-                                            speakOut("警告！距离未知物体过近，请避让！", isInterrupt = true)
+                                        // 🌟 改为排队模式，不打断大模型语音输出
+                                        if (closePointsCount > 50 && !tts.isSpeaking) {
+                                            speakOut("警告！距离未知物体过近，请避让！", isInterrupt = false)
                                             lastUrgentSpeakTime = currentTimeSpeakROI
                                             lastNormalSpeakTime = currentTimeSpeakROI
                                         }
