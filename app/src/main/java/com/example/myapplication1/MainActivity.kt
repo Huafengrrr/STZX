@@ -48,12 +48,16 @@ import org.opencv.core.Mat
 import org.opencv.imgproc.Imgproc
 import org.tensorflow.lite.Interpreter
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.MappedByteBuffer
 import java.nio.channels.FileChannel
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -91,6 +95,12 @@ class MainActivity : AppCompatActivity() {
     // ===== 状态控制变量 =====
     private var lastVolumeClickTime = 0L // 记录上次按下音量键的时间，防抖
     private var latestBitmap: Bitmap? = null // 缓存最新的摄像头画面，供 LLM 分析使用
+
+    // ===== 🌟 关键帧保存（方案A：本地保存）=====
+    private var lastFrameSaveTime = 0L       // 上次保存帧的时间戳（毫秒）
+    private lateinit var frameSaveDir: File   // 帧保存目录
+    private val FRAME_SAVE_INTERVAL_MS = 1000L // 每秒保存一帧
+    private var isFrameSavingEnabled = true    // 是否启用帧保存（可通过语音或按键切换）
 
     // ===== API 密钥与地址 =====
     private val API_URL = "https://u755199-86f1-40c5b23f.westd.seetacloud.com:8443" // AutoDL Qwen-VL 模型接口地址
@@ -261,9 +271,24 @@ class MainActivity : AppCompatActivity() {
     private val requestPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         if (it.entries.all { p -> p.value }) {
             startUSBCamera()
-            startLocationCruise() // 权限授予后，启动后台巡航定位
+            startLocationCruise()
         } else {
             Toast.makeText(this, "需要全部权限才能正常运行", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // 🌟 关键帧保存：保存当前帧到本地存储（JPEG格式）
+    private fun saveFrameToLocal(bitmap: Bitmap) {
+        try {
+            val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault()).format(Date())
+            val fileName = "frame_${timeStamp}.jpg"
+            val file = File(frameSaveDir, fileName)
+            FileOutputStream(file).use { out ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
+            }
+            Log.i("FrameSave", "帧已保存: ${file.absolutePath}")
+        } catch (e: Exception) {
+            Log.e("FrameSave", "保存帧失败: ${e.message}")
         }
     }
 
@@ -292,6 +317,12 @@ class MainActivity : AppCompatActivity() {
         overlayRight.bringToFront()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+
+        // 🌟 关键帧保存：创建本地保存目录
+        frameSaveDir = File(getExternalFilesDir(null), "Pictures/frames")
+        if (!frameSaveDir.exists()) {
+            frameSaveDir.mkdirs()
+        }
 
         // 初始化 TTS 语音引擎
         tts = TextToSpeech(this) {
@@ -1090,6 +1121,17 @@ class MainActivity : AppCompatActivity() {
                         }
 
                         latestBitmap = leftPreviewBitmap
+
+                        // 🌟 关键帧保存：每秒保存一帧到本地存储
+                        if (isFrameSavingEnabled) {
+                            val now = System.currentTimeMillis()
+                            if (now - lastFrameSaveTime >= FRAME_SAVE_INTERVAL_MS) {
+                                lastFrameSaveTime = now
+                                // 使用 copies 避免 Bitmap 被回收或复用导致的问题
+                                val frameToSave = leftPreviewBitmap.copy(leftPreviewBitmap.config, false)
+                                saveFrameToLocal(frameToSave)
+                            }
+                        }
 
                         // 🌟 解除卡顿封印：让上下两屏原画面全速 30 FPS 刷新上屏！
                         runOnUiThread {
