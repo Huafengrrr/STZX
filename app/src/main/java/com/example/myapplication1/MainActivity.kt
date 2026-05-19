@@ -467,6 +467,22 @@ class MainActivity : AppCompatActivity() {
             LocationManager.NETWORK_PROVIDER
         }
 
+        // 🌟 修复：先尝试用最后已知位置立即上传，防止 onLocationChanged 永远不触发导致上传失败
+        try {
+            val lastLoc = locationManager.getLastKnownLocation(provider)
+            if (lastLoc != null) {
+                val (gcjLon, gcjLat) = wgs84ToGcj02(lastLoc.longitude, lastLoc.latitude)
+                lastKnownLon = gcjLon
+                lastKnownLat = gcjLat
+                Log.i("Location", "使用最后已知位置上传：$gcjLon, $gcjLat")
+                uploadLocationToUniCloud(gcjLon, gcjLat, "Normal")
+            } else {
+                Log.w("Location", "getLastKnownLocation 返回 null，无历史位置可用")
+            }
+        } catch (e: Exception) {
+            Log.e("Location", "获取最后已知位置失败: ${e.message}")
+        }
+
         // 🌟 核心修复：抛弃过时的 getLastKnownLocation，强制向硬件要一次最新鲜的坐标！
         try {
             locationManager.requestLocationUpdates(provider, 0L, 0f, object : LocationListener {
@@ -546,23 +562,33 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 🌟 方案 2：通过 OkHttp 将位置数据发送到 uniCloud URL化接口
+     * 🌟 修复：上传位置数据到 uniCloud 云函数
+     * 增强：错误处理、坐标有效性检查、失败自动重试（最多2次）
      */
-    private fun uploadLocationToUniCloud(lon: Double, lat: Double, status: String = "Normal") {
-        // 替换为你自己在 uniCloud 控制台生成的云函数 URL 化链接
+    private fun uploadLocationToUniCloud(lon: Double, lat: Double, status: String = "Normal", retryCount: Int = 0) {
+        // 🌟 新增：过滤无效坐标(0,0)，防止污染云端数据
+        if (lon == 0.0 && lat == 0.0) {
+            Log.w("UniCloud", "坐标无效(0,0)，跳过上传")
+            return
+        }
+
         val uniCloudUrl = "https://fc-mp-6aceaf7c-21e7-4eb1-a4f8-8e2bbdb8d479.next.bspapp.com/uploadLocation"
+
+        // 🌟 修复：确保 deviceId 已初始化
+        if (myDeviceId.isEmpty()) {
+            myDeviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
+            Log.i("UniCloud", "deviceId 已初始化: $myDeviceId")
+        }
 
         val json = JSONObject().apply {
             put("longitude", lon)
             put("latitude", lat)
-            // 🌟 使用系统抓取的真实硬件码
-            if (myDeviceId.isEmpty()) {
-                myDeviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
-            }
             put("deviceId", myDeviceId)
             put("status", status)
             put("timestamp", System.currentTimeMillis())
         }
+
+        Log.d("UniCloud", ">>> 上传位置: lon=$lon, lat=$lat, deviceId=$myDeviceId, status=$status, retry=$retryCount")
 
         val requestBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         val request = Request.Builder()
@@ -572,12 +598,24 @@ class MainActivity : AppCompatActivity() {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.e("UniCloud", "数据上传失败: ${e.message}")
+                Log.e("UniCloud", ">>> 数据上传失败 (retry=$retryCount): ${e.message}")
+                // 🌟 新增：失败重试机制，最多重试2次
+                if (retryCount < 2) {
+                    Log.i("UniCloud", "3秒后重试上传...")
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        uploadLocationToUniCloud(lon, lat, status, retryCount + 1)
+                    }, 3000)
+                } else {
+                    Log.e("UniCloud", ">>> 上传失败，已达最大重试次数，放弃")
+                }
             }
             override fun onResponse(call: Call, response: Response) {
                 response.use {
+                    val bodyStr = it.body?.string()
                     if (it.isSuccessful) {
-                        Log.d("UniCloud", "数据上传成功: ${it.body?.string()}")
+                        Log.i("UniCloud", ">>> 数据上传成功: $bodyStr")
+                    } else {
+                        Log.e("UniCloud", ">>> 上传失败 HTTP ${it.code}: $bodyStr")
                     }
                 }
             }
