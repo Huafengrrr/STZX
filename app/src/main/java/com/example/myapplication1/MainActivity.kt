@@ -580,7 +580,9 @@ class MainActivity : AppCompatActivity() {
             Log.i("UniCloud", "deviceId 已初始化: $myDeviceId")
         }
 
+        // 🌟 修复：显式添加 action 字段，确保云函数能正确识别请求类型
         val json = JSONObject().apply {
+            put("action", "uploadLocation")  // 显式指定 action
             put("longitude", lon)
             put("latitude", lat)
             put("deviceId", myDeviceId)
@@ -589,11 +591,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         Log.d("UniCloud", ">>> 上传位置: lon=$lon, lat=$lat, deviceId=$myDeviceId, status=$status, retry=$retryCount")
+        Log.d("UniCloud", ">>> 请求Body: $json")
 
         val requestBody = json.toString().toRequestBody("application/json; charset=utf-8".toMediaType())
         val request = Request.Builder()
             .url(uniCloudUrl)
             .post(requestBody)
+            .addHeader("Content-Type", "application/json")  // 🌟 显式添加 Content-Type header
             .build()
 
         client.newCall(request).enqueue(object : Callback {
@@ -612,6 +616,7 @@ class MainActivity : AppCompatActivity() {
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     val bodyStr = it.body?.string()
+                    Log.i("UniCloud", ">>> HTTP ${it.code}, Body: $bodyStr")
                     if (it.isSuccessful) {
                         Log.i("UniCloud", ">>> 数据上传成功: $bodyStr")
                     } else {
