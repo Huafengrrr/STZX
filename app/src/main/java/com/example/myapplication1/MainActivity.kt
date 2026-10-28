@@ -70,11 +70,11 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
  */
 class MainActivity : AppCompatActivity() {
 
-    // 🌟 新增：设备的全局唯一硬件码
+    //  新增：设备的全局唯一硬件码
     private var myDeviceId: String = ""
-    // 🌟 新增：标记是否已经被家属绑定
+    //  新增：标记是否已经被家属绑定
     private var isDeviceBound: Boolean = false
-    // 🌟 新增：防止配对码播报期间被下一轮轮询重复打断
+    //  新增：防止配对码播报期间被下一轮轮询重复打断
     private var isPairingCodeSpeaking = false
 
     /**
@@ -88,7 +88,7 @@ class MainActivity : AppCompatActivity() {
      * @param score 置信度得分 (0.0 ~ 1.0)
      * @param distance 当前帧计算出的深度/距离 (米)
      * @param lastDistance 历史/上一帧的距离 (用于 EMA 滤波平滑)
-     * @param disparity 🌟 新增：该物体的双目视差，用于右眼画面的精准画框偏移
+     * @param disparity  新增：该物体的双目视差，用于右眼画面的精准画框偏移
      */
     data class Detection(var cx: Float, var cy: Float, var w: Float, var h: Float, val classId: Int, val score: Float, var distance: Float = -1f, var lastDistance: Float = -1f, var disparity: Float = 0f, var vx: Float = 0f, var vy: Float = 0f)
 
@@ -96,7 +96,7 @@ class MainActivity : AppCompatActivity() {
     private var lastVolumeClickTime = 0L // 记录上次按下音量键的时间，防抖
     private var latestBitmap: Bitmap? = null // 缓存最新的摄像头画面，供 LLM 分析使用
 
-    // ===== 🌟 关键帧保存（方案A：本地保存）=====
+    // =====  关键帧保存（方案A：本地保存）=====
     private var lastFrameSaveTime = 0L       // 上次保存帧的时间戳（毫秒）
     private lateinit var frameSaveDir: File   // 帧保存目录
     private val FRAME_SAVE_INTERVAL_MS = 1000L // 每秒保存一帧
@@ -108,16 +108,16 @@ class MainActivity : AppCompatActivity() {
     private val AMAP_WEB_KEY = "66eafa772acc05e7a8e587b4bd69074e" // 高德地图 Web 服务 API Key
     private val client = OkHttpClient() // OkHttp 网络请求客户端
 
-    // ===== 🌟 导航与寻址专用的后台状态变量 =====
+    // =====  导航与寻址专用的后台状态变量 =====
     private var locationTimer: java.util.Timer? = null // 后台静默定位定时器
     private var lastAnnouncedStreet = "" // 记录上次播报的街道名，防止一直重复同一条街
     private var lastIntersectionTime = 0L // 记录上次播报交叉路口的时间戳，防路口刷屏
 
-    // 🌟 新增：全局坐标缓存，专为跌倒等紧急情况瞬间提取最后一次已知位置使用
+    //  新增：全局坐标缓存，专为跌倒等紧急情况瞬间提取最后一次已知位置使用
     private var lastKnownLon: Double = 0.0
     private var lastKnownLat: Double = 0.0
 
-    // ===== 🌟 语音导航专用状态变量 =====
+    // =====  语音导航专用状态变量 =====
     private var isNavigating = false // 是否正在导航模式
     private var navSteps = mutableListOf<NavigationStep>() // 导航步骤列表
     private var currentStepIndex = 0 // 当前走到了第几步
@@ -143,14 +143,14 @@ class MainActivity : AppCompatActivity() {
             val matches = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
             if (!matches.isNullOrEmpty()) {
                 val userText = matches[0] // 提取用户说的第一句话
-                // 🌟 意图路由升级：扩大定位触发词库，支持更多自然语言问法
+                //  意图路由升级：扩大定位触发词库，支持更多自然语言问法
                 val locationKeywords = listOf("在哪", "位置", "定位", "地方", "方位", "哪儿", "什么路", "什么街")
-                // 🌟 新增：导航意图关键词识别（支持"导航到xxx"、"去xxx"、"带我去xxx"等说法）
+                //  新增：导航意图关键词识别（支持"导航到xxx"、"去xxx"、"带我去xxx"等说法）
                 val navKeywords = listOf("导航到", "导航去", "去", "带我到", "去往")
                 val isNavIntent = navKeywords.any { userText.contains(it) }
 
                 if (isNavIntent) {
-                    // 🌟 截取目的地名称（去掉"导航到"等前缀）
+                    //  截取目的地名称（去掉"导航到"等前缀）
                     var destination = userText
                     for (keyword in navKeywords) {
                         if (userText.contains(keyword)) {
@@ -166,7 +166,7 @@ class MainActivity : AppCompatActivity() {
                 } else if (locationKeywords.any { userText.contains(it) }) {
                     tellMeWhereIAm()
                 } else {
-                    // 🌟 按键触发，拥有最高打断特权，强行切断废话！
+                    //  按键触发，拥有最高打断特权，强行切断废话！
                     speakOut("收到，正在看图思考", isInterrupt = true)
                     askLlm(userText)
                 }
@@ -180,22 +180,22 @@ class MainActivity : AppCompatActivity() {
     private var lastFpsTime = 0L
     private lateinit var fallDetector: FallDetector // 跌倒检测模块 (需外部实现)
 
-    // 🌟 核心绑定：双目分屏相关的 UI 组件
+    //  核心绑定：双目分屏相关的 UI 组件
     private lateinit var ivLeftEye: ImageView
     private lateinit var ivRightEye: ImageView
     private lateinit var overlayLeft: OverlayView
     private lateinit var overlayRight: OverlayView
 
-    // 🌟 新增：求救防抖时间戳
+    //  新增：求救防抖时间戳
     private var lastSOSTime = 0L
-    // 🌟 音量上键快速连按求救状态：记录按下次时间和计数器
+    //  音量上键快速连按求救状态：记录按下次时间和计数器
     private var sosPressCount = 0          // 累计按下次数
     private var sosFirstPressTime = 0L     // 第一次按下的时间戳
     private val SOS_PRESS_INTERVAL_MS = 800 // 两次按键间隔必须小于800ms才算连按
     private val SOS_REQUIRED_COUNT = 3     // 连续按3次触发SOS
 
     // ===== 测距、测速与平滑算法缓存 =====
-    // 🌟 升级：双轨制语音控制时间戳，普通与紧急分离
+    //  升级：双轨制语音控制时间戳，普通与紧急分离
     private var lastNormalSpeakTime = 0L // 控制普通语音播报频率，避免连续吵闹
     private var lastUrgentSpeakTime = 0L // 控制紧急语音防抖，确保每句警报能完整说完
     private var lastPrimaryDist = 0f // 主目标上一帧距离，用于测速
@@ -208,7 +208,7 @@ class MainActivity : AppCompatActivity() {
     private var smoothedDistance = 0f // 主目标 EMA 滤波距离缓存
     private var lastSmoothedDetections = mutableListOf<Detection>() // 历史帧检测结果，用于 IoU 追踪和画框防抖
 
-    // 🌟 核心修改 1：将英文标签替换为中文，否则 TTS 语音引擎播报时会很别扭
+    //  核心修改 1：将英文标签替换为中文，否则 TTS 语音引擎播报时会很别扭
     private val labels = listOf(
         "人行道",  // 0: sidewalk
         "人",     // 1: person
@@ -219,7 +219,7 @@ class MainActivity : AppCompatActivity() {
         "自行车"  // 6: bicycle
     )
 
-    // 🌟 核心修改 2：危险/大件物品白名单
+    //  核心修改 2：危险/大件物品白名单
     // 注意：去掉了"人行道(sidewalk)"，因为你肯定不想盲杖对盲人说“警告，距离人行道过近请避让”
     private val dangerousLabels = setOf(
         "人", "柱子", "汽车", "卡车", "公交车", "自行车"
@@ -240,7 +240,7 @@ class MainActivity : AppCompatActivity() {
     private val mapLx by lazy { Mat() }; private val mapLy by lazy { Mat() }
     private val mapRx by lazy { Mat() }; private val mapRy by lazy { Mat() }
 
-    // 🌟 SGBM (半全局块匹配) 算法配置：用于生成视差图
+    //  SGBM (半全局块匹配) 算法配置：用于生成视差图
     private val sgbm by lazy {
         val blockWindowSize = 11 // 块匹配窗口大小，必须是奇数
         StereoSGBM.create(0, 64, blockWindowSize).apply {
@@ -277,7 +277,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 🌟 关键帧保存：保存当前帧到本地存储（JPEG格式）
+    //  关键帧保存：保存当前帧到本地存储（JPEG格式）
     private fun saveFrameToLocal(bitmap: Bitmap) {
         try {
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.getDefault()).format(Date())
@@ -293,7 +293,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // 🌟 核心修改：在 super.onCreate 之前调用，开启官方开机界面
+        //  核心修改：在 super.onCreate 之前调用，开启官方开机界面
         val splashScreen = installSplashScreen()
 
         super.onCreate(savedInstanceState)
@@ -302,7 +302,7 @@ class MainActivity : AppCompatActivity() {
         // 初始化 OpenCV
         if (!OpenCVLoader.initDebug()) Log.e("OpenCV", "OpenCV 初始化失败！") else initStereoRectify()
 
-        // 🌟 核心绑定：左眼/右眼画面 以及对应的 画框图层
+        //  核心绑定：左眼/右眼画面 以及对应的 画框图层
         ivLeftEye = findViewById(R.id.iv_left_eye)
         ivRightEye = findViewById(R.id.iv_right_eye)
         overlayLeft = findViewById(R.id.overlay_left)
@@ -318,7 +318,7 @@ class MainActivity : AppCompatActivity() {
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        // 🌟 关键帧保存：创建本地保存目录
+        //  关键帧保存：创建本地保存目录
         frameSaveDir = File(getExternalFilesDir(null), "Pictures/frames")
         if (!frameSaveDir.exists()) {
             frameSaveDir.mkdirs()
@@ -330,7 +330,7 @@ class MainActivity : AppCompatActivity() {
                 tts.setLanguage(Locale.CHINESE)
                 speakOut("声途智行启动成功", isInterrupt = false)
 
-                // 🌟 就在这里！只要 TTS 初始化成功，立刻开始设备鉴权与播报配对码！
+                //  就在这里！只要 TTS 初始化成功，立刻开始设备鉴权与播报配对码！
                 initDeviceBinding()
             }
         }
@@ -340,7 +340,7 @@ class MainActivity : AppCompatActivity() {
             runOnUiThread { Toast.makeText(this, "检测到严重跌倒！", Toast.LENGTH_LONG).show() }
             speakOut("警告！检测到摔倒，正在启动紧急求助程序！", isInterrupt = true)
 
-            // 🌟 核心修复：发生跌倒时，立即上传状态，并附带最后一次成功缓存的经纬度，防止崩溃！
+            //  核心修复：发生跌倒时，立即上传状态，并附带最后一次成功缓存的经纬度，防止崩溃！
             if (lastKnownLon != 0.0 && lastKnownLat != 0.0) {
                 uploadLocationToUniCloud(lastKnownLon, lastKnownLat, "FALL")
             }
@@ -355,13 +355,13 @@ class MainActivity : AppCompatActivity() {
         // 检查并请求权限
         if (requiredPermissions.all { ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED }) {
             startUSBCamera()
-            startLocationCruise() // 🌟 权限都有了，启动后台位置巡航
+            startLocationCruise() //  权限都有了，启动后台位置巡航
         } else {
             requestPermissionLauncher.launch(requiredPermissions)
         }
     }
 
-    // ================== 🌟 智能导航、寻址与物联网绑定核心逻辑 ==================
+    // ==================  智能导航、寻址与物联网绑定核心逻辑 ==================
 
     /**
      * 初始化设备绑定逻辑（向云端获取配对码并播报）
@@ -396,12 +396,12 @@ class MainActivity : AppCompatActivity() {
                         val code = resJson.getString("pairingCode")
 
                         if (!isBound) {
-                            // 🌟 核心优化：把 123456 变成 "1  2  3  4  5  6" 防止被读成十几万，双空格分隔比逗号更流畅
+                            //  核心优化：把 123456 变成 "1  2  3  4  5  6" 防止被读成十几万，双空格分隔比逗号更流畅
                             val spacedCode = code.toCharArray().joinToString("  ")
                             val textToSpeak = "欢迎使用声途智行。您的盲杖配对码是：$spacedCode。请家属在亲友端输入绑定。"
 
                             runOnUiThread {
-                                // 🌟 防重播：正在播报配对码时不重复触发，避免播到一半被打断重来
+                                //  防重播：正在播报配对码时不重复触发，避免播到一半被打断重来
                                 if (!isPairingCodeSpeaking) {
                                     isPairingCodeSpeaking = true
                                     // 播完之后才触发下一轮绑定查询，从根本上杜绝自我打断
@@ -420,7 +420,7 @@ class MainActivity : AppCompatActivity() {
                                     })
                                     tts.speak(textToSpeak, TextToSpeech.QUEUE_FLUSH, null, "PAIRING_CODE")
                                 }
-                                // 🌟 正在播报中：不打断，轮询下一次交给 onDone 回调处理
+                                //  正在播报中：不打断，轮询下一次交给 onDone 回调处理
                             }
                         } else {
                             // 如果之前是未绑定状态，现在发现被绑定了，播报成功！
@@ -467,7 +467,7 @@ class MainActivity : AppCompatActivity() {
             LocationManager.NETWORK_PROVIDER
         }
 
-        // 🌟 修复：先尝试用最后已知位置立即上传，防止 onLocationChanged 永远不触发导致上传失败
+        //  修复：先尝试用最后已知位置立即上传，防止 onLocationChanged 永远不触发导致上传失败
         try {
             val lastLoc = locationManager.getLastKnownLocation(provider)
             if (lastLoc != null) {
@@ -483,7 +483,7 @@ class MainActivity : AppCompatActivity() {
             Log.e("Location", "获取最后已知位置失败: ${e.message}")
         }
 
-        // 🌟 核心修复：抛弃过时的 getLastKnownLocation，强制向硬件要一次最新鲜的坐标！
+        //  核心修复：抛弃过时的 getLastKnownLocation，强制向硬件要一次最新鲜的坐标！
         try {
             locationManager.requestLocationUpdates(provider, 0L, 0f, object : LocationListener {
                 override fun onLocationChanged(loc: Location) {
@@ -499,7 +499,7 @@ class MainActivity : AppCompatActivity() {
                     // 触发后台高德解析与路口播报
                     fetchAddressFromAmap(gcjLon, gcjLat, isSilent = true)
 
-                    // 🌟 顺带检查是否到达下一个导航节点
+                    //  顺带检查是否到达下一个导航节点
                     checkNavProgress()
 
                     // 立刻上传云端，让亲友端看到移动！
@@ -509,7 +509,7 @@ class MainActivity : AppCompatActivity() {
                 override fun onProviderEnabled(provider: String) {}
                 override fun onProviderDisabled(provider: String) {}
 
-                // 🌟 极其重要：因为是在后台定时器线程调用的，必须传入主线程 Looper 才能工作！
+                //  极其重要：因为是在后台定时器线程调用的，必须传入主线程 Looper 才能工作！
             }, Looper.getMainLooper())
 
         } catch (e: Exception) {
@@ -521,7 +521,7 @@ class MainActivity : AppCompatActivity() {
      * 用户主动询问位置
      */
     private fun tellMeWhereIAm() {
-        // 🌟 按键触发的定位询问，同样具备最高打断特权
+        //  按键触发的定位询问，同样具备最高打断特权
         speakOut("正在获取精准定位，请稍候", isInterrupt = true)
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             speakOut("缺少定位权限，请在设置中开启", isInterrupt = true)
@@ -530,7 +530,7 @@ class MainActivity : AppCompatActivity() {
 
         val locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
 
-        // 🌟 强行优先使用 GPS_PROVIDER 获取最高精度的卫星定位！如果室内无 GPS 信号再降级使用网络
+        //  强行优先使用 GPS_PROVIDER 获取最高精度的卫星定位！如果室内无 GPS 信号再降级使用网络
         val provider = if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
             LocationManager.GPS_PROVIDER
         } else {
@@ -542,17 +542,17 @@ class MainActivity : AppCompatActivity() {
             override fun onLocationChanged(loc: Location) {
                 locationManager.removeUpdates(this) // 获取到最新位置后立即移除监听，省电
 
-                // 🌟 终极修复：把手机原生定位 (WGS84 国际标准) 转换为高德地图专属坐标 (GCJ-02 火星坐标)
+                //  终极修复：把手机原生定位 (WGS84 国际标准) 转换为高德地图专属坐标 (GCJ-02 火星坐标)
                 // 彻底解决地点完全对不上、漂移好几条街的深坑！
                 val (gcjLon, gcjLat) = wgs84ToGcj02(loc.longitude, loc.latitude)
 
-                // 🌟 更新全局位置缓存
+                //  更新全局位置缓存
                 lastKnownLon = gcjLon
                 lastKnownLat = gcjLat
 
                 fetchAddressFromAmap(gcjLon, gcjLat, isSilent = false)
 
-                // 🌟 主动询问位置时，也同步更新一次给亲友端
+                //  主动询问位置时，也同步更新一次给亲友端
                 uploadLocationToUniCloud(gcjLon, gcjLat, "Normal")
             }
             override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
@@ -562,11 +562,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 🌟 修复：上传位置数据到 uniCloud 云函数
+     *  修复：上传位置数据到 uniCloud 云函数
      * 增强：错误处理、坐标有效性检查、失败自动重试（最多2次）
      */
     private fun uploadLocationToUniCloud(lon: Double, lat: Double, status: String = "Normal", retryCount: Int = 0) {
-        // 🌟 新增：过滤无效坐标(0,0)，防止污染云端数据
+        //  新增：过滤无效坐标(0,0)，防止污染云端数据
         if (lon == 0.0 && lat == 0.0) {
             Log.w("UniCloud", "坐标无效(0,0)，跳过上传")
             return
@@ -574,13 +574,13 @@ class MainActivity : AppCompatActivity() {
 
         val uniCloudUrl = "https://fc-mp-6aceaf7c-21e7-4eb1-a4f8-8e2bbdb8d479.next.bspapp.com/uploadLocation"
 
-        // 🌟 修复：确保 deviceId 已初始化
+        //  修复：确保 deviceId 已初始化
         if (myDeviceId.isEmpty()) {
             myDeviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)
             Log.i("UniCloud", "deviceId 已初始化: $myDeviceId")
         }
 
-        // 🌟 修复：显式添加 action 字段，确保云函数能正确识别请求类型
+        //  修复：显式添加 action 字段，确保云函数能正确识别请求类型
         val json = JSONObject().apply {
             put("action", "uploadLocation")  // 显式指定 action
             put("longitude", lon)
@@ -597,13 +597,13 @@ class MainActivity : AppCompatActivity() {
         val request = Request.Builder()
             .url(uniCloudUrl)
             .post(requestBody)
-            .addHeader("Content-Type", "application/json")  // 🌟 显式添加 Content-Type header
+            .addHeader("Content-Type", "application/json")  //  显式添加 Content-Type header
             .build()
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 Log.e("UniCloud", ">>> 数据上传失败 (retry=$retryCount): ${e.message}")
-                // 🌟 新增：失败重试机制，最多重试2次
+                //  新增：失败重试机制，最多重试2次
                 if (retryCount < 2) {
                     Log.i("UniCloud", "3秒后重试上传...")
                     Handler(Looper.getMainLooper()).postDelayed({
@@ -634,7 +634,7 @@ class MainActivity : AppCompatActivity() {
      * @param isSilent: true 代表是后台自动巡航查询，只有在关键节点才发声；false 代表用户主动提问，必须发声。
      */
     private fun fetchAddressFromAmap(lon: Double, lat: Double, isSilent: Boolean = false) {
-        // 🌟 精度保卫战：强行将转换后的经纬度格式化为 6 位小数（亚米级精度），绝不让高德收到低精度截断坐标！
+        //  精度保卫战：强行将转换后的经纬度格式化为 6 位小数（亚米级精度），绝不让高德收到低精度截断坐标！
         val formattedLon = String.format(Locale.US, "%.6f", lon)
         val formattedLat = String.format(Locale.US, "%.6f", lat)
 
@@ -747,7 +747,7 @@ class MainActivity : AppCompatActivity() {
                                     if (intersectionAlert.isNotEmpty()) append(intersectionAlert)
                                     if (roadsAlert.isNotEmpty()) append(roadsAlert) // 只在用户主动提问时才播报周边道路
                                 }
-                                // 🌟 用户主动提问的反馈，特权打断
+                                //  用户主动提问的反馈，特权打断
                                 speakOut(speakText.toString(), isInterrupt = true)
                             } else {
                                 val currentTime = System.currentTimeMillis()
@@ -778,11 +778,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =============================================================
-    // 🌟 【语音导航核心模块】：高德 Web API 步行路线规划 + 纯语音播报
+    //  【语音导航核心模块】：高德 Web API 步行路线规划 + 纯语音播报
     // =============================================================
 
     /**
-     * 🌟 导航入口：根据用户说的目的地启动步行导航流程
+     *  导航入口：根据用户说的目的地启动步行导航流程
      * @param destination 用户想去的地名/地址（如"北京西站"、"天安门"）
      */
     private fun startNavigation(destination: String) {
@@ -813,7 +813,7 @@ class MainActivity : AppCompatActivity() {
                     lastKnownLon = gcjLon
                     lastKnownLat = gcjLat
 
-                    // 🌟 调用高德步行路线规划 API
+                    //  调用高德步行路线规划 API
                     fetchWalkingRoute(gcjLon, gcjLat, destination)
                 }
                 override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
@@ -827,7 +827,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 🌟 调用高德步行路线规划 Web API
+     *  调用高德步行路线规划 Web API
      * @param originLon 起点经度（GCJ02）
      * @param originLat 起点纬度（GCJ02）
      * @param destinationName 目的地名称
@@ -890,7 +890,7 @@ class MainActivity : AppCompatActivity() {
 
                                         val stepsArray = pathArray.getJSONObject(0).getJSONArray("steps")
 
-                                        // 🌟 解析每一步的导航指令
+                                        //  解析每一步的导航指令
                                         navSteps.clear()
                                         var totalDistance = 0
                                         for (i in 0 until stepsArray.length()) {
@@ -916,7 +916,7 @@ class MainActivity : AppCompatActivity() {
                                             totalDistance += distance
                                         }
 
-                                        // 🌟 开启导航状态，播报路线总览
+                                        //  开启导航状态，播报路线总览
                                         isNavigating = true
                                         currentStepIndex = 0
 
@@ -948,13 +948,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 🌟 播报当前导航步骤
+     *  播报当前导航步骤
      * 当用户到达每一个导航节点时调用此方法播报下一步转向指令
      */
     private fun announceCurrentNavStep() {
         if (!isNavigating || currentStepIndex >= navSteps.size) {
             if (isNavigating) {
-                // 🌟 到达目的地！
+                //  到达目的地！
                 isNavigating = false
                 navSteps.clear()
                 speakOut("已到达目的地！祝您一路平安！", isInterrupt = true)
@@ -970,7 +970,7 @@ class MainActivity : AppCompatActivity() {
             "${step.distance}米"
         }
 
-        // 🌟 组装播报文本：先说距离，再说转向指令（符合盲人导航习惯）
+        //  组装播报文本：先说距离，再说转向指令（符合盲人导航习惯）
         val speakText = buildString {
             append("沿${step.roadName}直行")
             append(distanceText)
@@ -981,7 +981,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 🌟 到达节点判断（ Haversine 半正矢公式计算两点间球面距离）
+     *  到达节点判断（ Haversine 半正矢公式计算两点间球面距离）
      * @return 两点间距离（米）
      */
     private fun haversineDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
@@ -996,7 +996,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 🌟 在后台巡航定位时，顺带检查是否到达下一个导航节点
+     *  在后台巡航定位时，顺带检查是否到达下一个导航节点
      * 每次 silentlyFetchLocation() 拿到新坐标时自动触发
      */
     private fun checkNavProgress() {
@@ -1005,11 +1005,11 @@ class MainActivity : AppCompatActivity() {
         val step = navSteps[currentStepIndex]
         val distToNode = haversineDistance(lastKnownLat, lastKnownLon, step.lat, step.lon)
 
-        // 🌟 到达阈值：距离节点20米以内就算到达
+        //  到达阈值：距离节点20米以内就算到达
         if (distToNode <= 20.0) {
             currentStepIndex++
 
-            // 🌟 到达倒数第二个节点（还剩50米以内）时播报最后一次提示
+            //  到达倒数第二个节点（还剩50米以内）时播报最后一次提示
             if (currentStepIndex == navSteps.size - 1) {
                 val lastStep = navSteps[currentStepIndex]
                 speakOut("前方${lastStep.distance}米，到达${lastStep.instruction}", isInterrupt = false)
@@ -1025,7 +1025,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     // =============================================================
-    // 🌟 【重磅武器】：WGS84 国际标准坐标 转 GCJ-02 火星坐标算法
+    //  【重磅武器】：WGS84 国际标准坐标 转 GCJ-02 火星坐标算法
     // 彻底消灭国内安卓手机定位和高德地图之间 500 米偏移的罪魁祸首！
 
     private fun transformLat(x: Double, y: Double): Double {
@@ -1113,7 +1113,7 @@ class MainActivity : AppCompatActivity() {
                 isDrawing = true
 
                 cameraExecutor.execute {
-                    // ================= 🌟 修复 FPS 显示 Bug =================
+                    // =================  修复 FPS 显示 Bug =================
                     frameCount++
                     val currentTime = System.currentTimeMillis()
                     if (currentTime - lastFpsTime >= 1000L) {
@@ -1124,7 +1124,7 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     try {
-                        // 🌟 【防黑屏自适应算法】动态推算相机的真实分辨率，防止摄像头意外降级导致解析越界崩溃！
+                        //  【防黑屏自适应算法】动态推算相机的真实分辨率，防止摄像头意外降级导致解析越界崩溃！
                         val dataSize = data.size
                         val actualWidth: Int
                         val actualHeight: Int
@@ -1165,7 +1165,7 @@ class MainActivity : AppCompatActivity() {
 
                         latestBitmap = leftPreviewBitmap
 
-                        // 🌟 关键帧保存：每秒保存一帧到本地存储
+                        //  关键帧保存：每秒保存一帧到本地存储
                         if (isFrameSavingEnabled) {
                             val now = System.currentTimeMillis()
                             if (now - lastFrameSaveTime >= FRAME_SAVE_INTERVAL_MS) {
@@ -1176,7 +1176,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         }
 
-                        // 🌟 解除卡顿封印：让上下两屏原画面全速 30 FPS 刷新上屏！
+                        //  解除卡顿封印：让上下两屏原画面全速 30 FPS 刷新上屏！
                         runOnUiThread {
                             ivLeftEye.setImageBitmap(leftPreviewBitmap)
                             ivRightEye.setImageBitmap(rightPreviewBitmap)
@@ -1238,7 +1238,7 @@ class MainActivity : AppCompatActivity() {
                                     val nmsDetections = mutableListOf<Detection>()
                                     for (det in rawDetections) {
                                         var suppress = false
-                                        // 🌟 优化修复 1：彻底解决一个物体上重叠多个框！
+                                        //  优化修复 1：彻底解决一个物体上重叠多个框！
                                         for (keep in nmsDetections) {
                                             if (calculateIoU(det, keep) > 0.45f) {
                                                 suppress = true; break
@@ -1247,10 +1247,10 @@ class MainActivity : AppCompatActivity() {
                                         if (!suppress) nmsDetections.add(det)
                                     }
 
-                                    // 🌟 优化修复 2：减少屏幕视觉杂乱，最多只保留得分最高的 4 个物体进行渲染
+                                    //  优化修复 2：减少屏幕视觉杂乱，最多只保留得分最高的 4 个物体进行渲染
                                     val finalDetections = nmsDetections.take(4)
-                                    val boxesToDrawLeft = mutableListOf<BoundingBox>()  // 🌟 左眼专用画框列表
-                                    val boxesToDrawRight = mutableListOf<BoundingBox>() // 🌟 右眼专用画框列表
+                                    val boxesToDrawLeft = mutableListOf<BoundingBox>()  //  左眼专用画框列表
+                                    val boxesToDrawRight = mutableListOf<BoundingBox>() //  右眼专用画框列表
 
                                     // ================= 步骤 4: SGBM 双目视差图生成 (移出 if 块，无论 YOLO 有无目标都要计算视差图！) =================
                                     org.opencv.android.Utils.bitmapToMat(originalBitmap, fullMat)
@@ -1270,7 +1270,7 @@ class MainActivity : AppCompatActivity() {
                                     sgbm.compute(rectL, rectR, disparity16S)
                                     disparity16S.convertTo(disparity32F, CvType.CV_32F, 1.0 / 16.0)
 
-                                    // 🌟 新增：YOLO 已知物体报警标志位（必须放在全局作用域，供后续判定互斥）
+                                    //  新增：YOLO 已知物体报警标志位（必须放在全局作用域，供后续判定互斥）
                                     var hasYoloWarning = false
 
                                     if (finalDetections.isNotEmpty()) {
@@ -1306,7 +1306,7 @@ class MainActivity : AppCompatActivity() {
                                                 det.w = boxAlpha * det.w + (1f - boxAlpha) * bestMatch.w
                                                 det.h = boxAlpha * det.h + (1f - boxAlpha) * bestMatch.h
                                                 det.lastDistance = bestMatch.distance
-                                                // 🌟 计算目标在画面中的移动速度 (像素/秒)，用于运动预测插值
+                                                //  计算目标在画面中的移动速度 (像素/秒)，用于运动预测插值
                                                 val dt = (System.currentTimeMillis() - lastPrimaryTime) / 1000f
                                                 if (dt > 0.05f && lastPrimaryTime > 0L) {
                                                     det.vx = (det.cx - bestMatch.cx) / dt
@@ -1320,7 +1320,7 @@ class MainActivity : AppCompatActivity() {
                                             val safeX = det.cx.toInt().coerceIn(0, 639)
                                             val safeY = det.cy.toInt().coerceIn(0, 479)
 
-                                            // 🌟【核心修复】左侧盲区智能宽幅采样算法：
+                                            // 【核心修复】左侧盲区智能宽幅采样算法：
                                             val searchW = (det.w * 0.40f).toInt().coerceAtLeast(10)
                                             val searchH = (det.h * 0.15f).toInt().coerceAtLeast(10)
 
@@ -1331,7 +1331,7 @@ class MainActivity : AppCompatActivity() {
 
                                             val dispList = mutableListOf<Double>()
 
-                                            // 🌟【方案1】自适应采样密度：目标越大，采样点越多，保证数据质量
+                                            // 【方案1】自适应采样密度：目标越大，采样点越多，保证数据质量
                                             val minSamples = 15
                                             val boxArea = det.w * det.h
                                             val adaptiveSamples = maxOf(minSamples, (boxArea / 800).toInt().coerceIn(15, 30))
@@ -1347,7 +1347,7 @@ class MainActivity : AppCompatActivity() {
                                                 }
                                             }
 
-                                            // 🌟【方案2】增强统计去噪：MAD异常值剔除 + 四分位法，先剔除离群点再求平均
+                                            // 【方案2】增强统计去噪：MAD异常值剔除 + 四分位法，先剔除离群点再求平均
                                             val d = if (dispList.size >= 5) {
                                                 dispList.sort()
                                                 val median = dispList[dispList.size / 2]
@@ -1400,7 +1400,7 @@ class MainActivity : AppCompatActivity() {
 
                                         for ((index, det) in closeTargets.withIndex()) {
                                             val finalLabel = if (det.classId < labels.size) labels[det.classId] else "未知"
-                                            val isUnknownLabel = (det.classId >= labels.size) // 🌟 未知类别不播报，只画框
+                                            val isUnknownLabel = (det.classId >= labels.size) //  未知类别不播报，只画框
                                             val finalZ = det.distance
                                             val distanceStr = String.format("%.1f米", finalZ)
                                             var speedStr = ""
@@ -1408,7 +1408,7 @@ class MainActivity : AppCompatActivity() {
 
                                             if (finalZ <= 1.0f && dangerousLabels.contains(finalLabel)) {
                                                 isTooClose = true
-                                                hasYoloWarning = true // 🌟 新增：记录 YOLO 发出了近距离警报，阻止全局 SGBM 重复报警
+                                                hasYoloWarning = true //  新增：记录 YOLO 发出了近距离警报，阻止全局 SGBM 重复报警
                                             }
 
                                             // 语音永远只判定离你最近的那一个（index == 0）
@@ -1436,9 +1436,9 @@ class MainActivity : AppCompatActivity() {
 
                                                 val currentTimeSpeak = System.currentTimeMillis()
 
-                                                // 🌟 核心功能升级：【所有播报都必须等上一句话播完再播下一句】！
+                                                //  核心功能升级：【所有播报都必须等上一句话播完再播下一句】！
                                                 if (isTooClose) {
-                                                    // 🚨 紧急避让警报
+                                                    //  紧急避让警报
                                                     // 必须等 tts 不在发音 (!tts.isSpeaking)，并且过了防抖冷却时间，才会播报下一句警告，绝不结巴！
                                                     if (!tts.isSpeaking && (currentTimeSpeak - lastUrgentSpeakTime > 2000L)) {
                                                         val speakText = "警告！距离$finalLabel 过近，请避让！"
@@ -1447,7 +1447,7 @@ class MainActivity : AppCompatActivity() {
                                                         lastNormalSpeakTime = currentTimeSpeak // 刷新普通时间
                                                     }
                                                 } else if (!isUnknownLabel) {
-                                                    // 🚶 常规路况播报（跳过"未知"物体，不打断大模型语音输出）
+                                                    //  常规路况播报（跳过"未知"物体，不打断大模型语音输出）
                                                     // 必须等 TTS 说完 + 超过防抖间隔，才播下一句
                                                     if (!tts.isSpeaking && (currentTimeSpeak - lastNormalSpeakTime > 2500L)) {
                                                         val speakText = if (speedStr.isNotEmpty()) {
@@ -1463,7 +1463,7 @@ class MainActivity : AppCompatActivity() {
 
                                             val displayLabel = if (distanceStr.isNotEmpty()) "$finalLabel $distanceStr$speedStr" else finalLabel
 
-                                            // 🌟 核心物理平移逻辑：分别为左眼和右眼计算不同的精准画框坐标！
+                                            //  核心物理平移逻辑：分别为左眼和右眼计算不同的精准画框坐标！
                                             if (viewW > 0f && viewH > 0f) {
                                                 val renderedH = viewW * (480f / 640f)
                                                 val yOffset = (viewH - renderedH) / 2f
@@ -1505,25 +1505,25 @@ class MainActivity : AppCompatActivity() {
                                         }
                                     }
 
-                                    // ================= 步骤 8: 🌟 SGBM 全局防撞兜底 (寻找未知障碍物) =================
-                                    // 🌟 新增：只有在 YOLO 没有发出警报时，才去排查是否有未知物体，防止两套系统同时说话吵架
+                                    // ================= 步骤 8:  SGBM 全局防撞兜底 (寻找未知障碍物) =================
+                                    //  新增：只有在 YOLO 没有发出警报时，才去排查是否有未知物体，防止两套系统同时说话吵架
                                     val currentTimeSpeakROI = System.currentTimeMillis()
                                     if (!hasYoloWarning && (currentTimeSpeakROI - lastUrgentSpeakTime > 2000L)) {
-                                        // 🌟 新增：划定前方走廊 ROI (画面正中央宽度，高度偏下半部分，避开天空和极远处的物体)
+                                        //  新增：划定前方走廊 ROI (画面正中央宽度，高度偏下半部分，避开天空和极远处的物体)
                                         val startX = 640 / 4          // 160
                                         val endX = 640 * 3 / 4        // 480
                                         val startY = 480 / 2          // 240
                                         val endY = 480 - 40           // 440，排除最底部的贴地噪点
 
                                         var closePointsCount = 0
-                                        // 🌟 新增：1.0米对应的安全视差阈值 = (焦距 * 基线) / 距离
+                                        //  新增：1.0米对应的安全视差阈值 = (焦距 * 基线) / 距离
                                         val dangerThresholdDisp = (328.26 * 60.99) / (1000.0 * 1.0) // 大约 20.0
 
-                                        // 🌟 新增：通过步长 (step 5) 进行下采样快速扫描，极大降低 CPU 消耗
+                                        //  新增：通过步长 (step 5) 进行下采样快速扫描，极大降低 CPU 消耗
                                         for (y in startY until endY step 5) {
                                             for (x in startX until endX step 5) {
                                                 val disp = disparity32F.get(y, x)[0]
-                                                // 🌟 新增：如果视差极大（超过1米阈值），说明有东西贴脸了
+                                                //  新增：如果视差极大（超过1米阈值），说明有东西贴脸了
                                                 // 添加 < 150.0 是为了过滤掉极度异常的噪点（比如死区）
                                                 if (disp > dangerThresholdDisp && disp < 150.0) {
                                                     closePointsCount++
@@ -1531,9 +1531,9 @@ class MainActivity : AppCompatActivity() {
                                             }
                                         }
 
-                                        // 🌟 新增：如果 ROI 内有超过 50 个采样点距离小于 1 米
+                                        //  新增：如果 ROI 内有超过 50 个采样点距离小于 1 米
                                         // (因为使用了 step 5 降采样，50个点其实代表了画面中很大的一块物理面积)
-                                        // 🌟 改为排队模式，不打断大模型语音输出
+                                        //  改为排队模式，不打断大模型语音输出
                                         if (closePointsCount > 50 && !tts.isSpeaking) {
                                             speakOut("警告！距离未知物体过近，请避让！", isInterrupt = false)
                                             lastUrgentSpeakTime = currentTimeSpeakROI
@@ -1559,7 +1559,7 @@ class MainActivity : AppCompatActivity() {
         })
     }
     /**
-     * 🌟 新增：触发主动求救 (SOS)
+     *  新增：触发主动求救 (SOS)
      */
     private fun triggerSOS() {
         val currentTime = System.currentTimeMillis()
@@ -1584,14 +1584,14 @@ class MainActivity : AppCompatActivity() {
     /**
      * 语音合成播报函数
      * @param text 需要朗读的中文文本
-     * @param isInterrupt 🌟 是否拥有最高打断特权（仅按键和大模型回复、跌倒报警允许为 true）
+     * @param isInterrupt  是否拥有最高打断特权（仅按键和大模型回复、跌倒报警允许为 true）
      */
     private fun speakOut(text: String, isInterrupt: Boolean = false) {
         if (isInterrupt) {
-            // 🚨 强打断特权：立刻清空排队队列，切断当前废话强制插播 (QUEUE_FLUSH)
+            //  强打断特权：立刻清空排队队列，切断当前废话强制插播 (QUEUE_FLUSH)
             tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "")
         } else {
-            // 🚶 老老实实排队：追加到队列末尾，耐心等前面的说完 (QUEUE_ADD)
+            //  老老实实排队：追加到队列末尾，耐心等前面的说完 (QUEUE_ADD)
             tts.speak(text, TextToSpeech.QUEUE_ADD, null, "")
         }
     }
@@ -1626,7 +1626,7 @@ class MainActivity : AppCompatActivity() {
         val currentFrame = latestBitmap ?: return
         Thread {
             try {
-                // 🌟 核心修复：强制约束大模型的“话痨”属性！
+                //  核心修复：强制约束大模型的“话痨”属性！
                 // 在用户真实提问前，强行植入一段极其严格的身份约束和字数限制指令。
                 val strictPrompt = "你是一个为视障人士服务的导盲助手。请用极其简短、精炼的一句话回答，字数务必控制在20字以内，绝不能有废话！用户问：$prompt"
 
@@ -1642,7 +1642,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     override fun onResponse(call: Call, response: Response) {
                         response.use {
-                            // 🌟 大模型返回结果，也是按键触发的一部分，拥有最高打断特权
+                            //  大模型返回结果，也是按键触发的一部分，拥有最高打断特权
                             if (it.isSuccessful) speakOut(JSONObject(it.body?.string() ?: "").getString("response"), isInterrupt = true)
                         }
                     }
@@ -1657,7 +1657,7 @@ class MainActivity : AppCompatActivity() {
      */
     override fun onDestroy() {
         super.onDestroy()
-        locationTimer?.cancel() // 🌟 必须手动销毁定时器，防止内存泄漏和后台异常费电
+        locationTimer?.cancel() //  必须手动销毁定时器，防止内存泄漏和后台异常费电
         cameraExecutor.shutdown()
         mCameraClient?.closeCamera()
         if (::tts.isInitialized) tts.shutdown()
@@ -1672,7 +1672,7 @@ class MainActivity : AppCompatActivity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         val currentTime = System.currentTimeMillis()
 
-        // 🌟 音量上键连按计数：SOS 求救（3次连按，间隔<800ms，总窗口<2秒）
+        //  音量上键连按计数：SOS 求救（3次连按，间隔<800ms，总窗口<2秒）
         if (keyCode == KeyEvent.KEYCODE_VOLUME_UP && event?.repeatCount == 0) {
             // 重置条件：超过2秒没按过则重新计数
             if (currentTime - sosFirstPressTime > 2000L) {
@@ -1693,7 +1693,7 @@ class MainActivity : AppCompatActivity() {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event?.repeatCount == 0) {
             if (currentTime - lastVolumeClickTime > 1500L) { // 1.5秒防连按控制
                 lastVolumeClickTime = currentTime
-                // 🌟 核心打断点：按键瞬间物理停止所有正在发音的语句！
+                //  核心打断点：按键瞬间物理停止所有正在发音的语句！
                 if (::tts.isInitialized) tts.stop()
                 try {
                     // 拉起安卓自带的语音识别器

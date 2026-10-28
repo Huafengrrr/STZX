@@ -7,7 +7,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import kotlin.math.sqrt
 
-// 🌟 独立的跌倒检测引擎
+//  独立的跌倒检测引擎
 class FallDetector(context: Context, private val onFallDetected: () -> Unit) : SensorEventListener {
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
     private val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
@@ -54,7 +54,7 @@ class FallDetector(context: Context, private val onFallDetected: () -> Unit) : S
 
                 // 摔倒过程极快，通常从下坠到砸地在 1 秒（1000毫秒）内完成
                 if (timeDifference < 1000L) {
-                    onFallDetected() // 🌟 触发警报！
+                    onFallDetected() //  触发警报！
                     isFreeFalling = false // 重置状态
                 }
             }

@@ -20,7 +20,7 @@ data class BoundingBox(
     val label: String,
     val score: Float
 ) {
-    // 🌟 新增：由底层 AI 算出的目标在屏幕上的移动速度 (像素/秒)
+    //  新增：由底层 AI 算出的目标在屏幕上的移动速度 (像素/秒)
     var vx: Float = 0f
     var vy: Float = 0f
 }
@@ -53,7 +53,7 @@ class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs
     // AI 传过来的真实检测结果 (可能 1 秒只有 4 次更新)
     private var results = mutableListOf<BoundingBox>()
 
-    // 🌟 新增：用于在 UI 层补帧的动画内部状态
+    //  新增：用于在 UI 层补帧的动画内部状态
     private var animatedResults = mutableListOf<BoundingBox>()
     private var lastUpdateTime = 0L
     private var interpolationEnabled = false
@@ -92,7 +92,7 @@ class OverlayView(context: Context?, attrs: AttributeSet?) : View(context, attrs
     }
 
     /**
-     * 🌟 核心魔法：系统底层的 60FPS 渲染回调
+     *  核心魔法：系统底层的 60FPS 渲染回调
      * 在 AI 推理“卡住”的这几百毫秒里，UI 并不闲着，而是根据目标的 vx, vy 惯性继续推着框走！
      */
     override fun doFrame(frameTimeNanos: Long) {
